@@ -47,7 +47,7 @@ jobs:
 
       - name: Start network monitor
         run: |
-          sudo tcpdump -i any -nn -q -l 2>/dev/null | grep -oP '\d+\.\d+\.\d+\.\d+' | sort -u > /tmp/depsec-capture.txt &
+          sudo tcpdump -i any -nn -q -l 2>/dev/null > /tmp/depsec-raw.pcap &
           echo $! > /tmp/depsec-tcpdump.pid
 
       - name: Run depsec on itself (static scan)
@@ -58,8 +58,22 @@ jobs:
         run: |
           if [ -f /tmp/depsec-tcpdump.pid ]; then
             sudo kill "$(cat /tmp/depsec-tcpdump.pid)" 2>/dev/null || true
-            sleep 1
+            sleep 2
           fi
+          # Extract unique IPs from raw capture, do reverse DNS where possible
+          grep -oP '\d+\.\d+\.\d+\.\d+' /tmp/depsec-raw.pcap 2>/dev/null | sort -u > /tmp/depsec-ips.txt
+          # Try reverse DNS for each IP
+          > /tmp/depsec-capture.txt
+          while read -r ip; do
+            host=$(dig +short -x "$ip" 2>/dev/null | head -1 | sed 's/\.$//')
+            if [ -n "$host" ]; then
+              echo "$host" >> /tmp/depsec-capture.txt
+            else
+              echo "$ip" >> /tmp/depsec-capture.txt
+            fi
+          done < /tmp/depsec-ips.txt
+          sort -u -o /tmp/depsec-capture.txt /tmp/depsec-capture.txt
+
           echo "=== Captured network connections ==="
           cat /tmp/depsec-capture.txt 2>/dev/null || echo "No connections captured"
           echo "=== Baseline check ==="
