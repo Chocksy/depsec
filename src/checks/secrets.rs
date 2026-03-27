@@ -16,7 +16,7 @@ const SECRET_PATTERNS: &[SecretPattern] = &[
     SecretPattern {
         rule_id: "DEPSEC-S001",
         name: "AWS Access Key",
-        pattern: r"AKIA[0-9A-Z]{16}",
+        pattern: r"\b(AKIA|ASIA)[0-9A-Z]{16}\b",
         severity: Severity::Critical,
     },
     SecretPattern {
@@ -112,7 +112,7 @@ const SECRET_PATTERNS: &[SecretPattern] = &[
     SecretPattern {
         rule_id: "DEPSEC-S017",
         name: "Twilio Key",
-        pattern: r"SK[0-9a-fA-F]{32}",
+        pattern: r"\bSK[0-9a-fA-F]{32}\b",
         severity: Severity::High,
     },
     SecretPattern {
@@ -124,7 +124,7 @@ const SECRET_PATTERNS: &[SecretPattern] = &[
     SecretPattern {
         rule_id: "DEPSEC-S019",
         name: "Heroku API Key",
-        pattern: r"(?i)heroku.*[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
+        pattern: r"(?i)heroku.{0,50}[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
         severity: Severity::High,
     },
     SecretPattern {
@@ -286,10 +286,13 @@ fn glob_matches(path: &str, pattern: &str) -> bool {
         }
     }
 
-    // Handle dir/* (matches files in that directory)
+    // Handle dir/* (matches files directly in that directory, not subdirectories)
     if let Some(dir_prefix) = pattern.strip_suffix("/*") {
-        let path_dir = path.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
-        return path_dir == dir_prefix || path.starts_with(&format!("{dir_prefix}/"));
+        if let Some(rest) = path.strip_prefix(&format!("{dir_prefix}/")) {
+            // Only match if there are no further directory separators
+            return !rest.contains('/');
+        }
+        return false;
     }
 
     // Handle *.ext

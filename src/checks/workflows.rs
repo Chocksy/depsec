@@ -187,6 +187,10 @@ fn check_pull_request_target(content: &str, file: &str, findings: &mut Vec<Findi
 
     let checkout_re = Regex::new(r"(?i)uses:\s*actions/checkout").unwrap();
     for (line_num, line) in content.lines().enumerate() {
+        // Skip commented lines
+        if line.trim().starts_with('#') {
+            continue;
+        }
         if checkout_re.is_match(line) {
             findings.push(Finding {
                 rule_id: "DEPSEC-W003".into(),
@@ -208,6 +212,7 @@ fn check_pull_request_target(content: &str, file: &str, findings: &mut Vec<Findi
 /// DEPSEC-W004: User-controlled expressions in run: blocks
 fn check_expression_injection(content: &str, file: &str, findings: &mut Vec<Finding>) {
     let mut in_run_block = false;
+    let mut run_indent: usize = 0;
 
     for (line_num, line) in content.lines().enumerate() {
         let trimmed = line.trim();
@@ -216,22 +221,24 @@ fn check_expression_injection(content: &str, file: &str, findings: &mut Vec<Find
         let is_run_line = trimmed.starts_with("run:")
             || trimmed.starts_with("- run:");
         if is_run_line {
-            in_run_block = trimmed.ends_with('|');
+            // Detect block scalar indicators: |, |-, |+, >, >-, >+
+            let after_run = trimmed.split_once("run:").map(|(_, r)| r.trim()).unwrap_or("");
+            in_run_block = after_run.starts_with('|') || after_run.starts_with('>');
+            run_indent = line.len() - line.trim_start().len();
             check_line_for_injection(line, line_num, file, findings);
             continue;
         }
 
         // Continue checking multiline run blocks
         if in_run_block {
-            // End of multiline block when indentation drops
-            if !trimmed.is_empty() && !line.starts_with("          ") && !line.starts_with("\t\t") {
-                // Simple heuristic: if the line doesn't continue the indentation, we're done
-                // This is imprecise but catches the majority of cases
-                if trimmed.contains(':') && !trimmed.starts_with('#') && !trimmed.starts_with('-')
-                {
-                    in_run_block = false;
-                    continue;
-                }
+            if trimmed.is_empty() {
+                continue; // Blank lines within a block are OK
+            }
+            // End of block when indentation returns to or below the run: level
+            let current_indent = line.len() - line.trim_start().len();
+            if current_indent <= run_indent {
+                in_run_block = false;
+                continue;
             }
             check_line_for_injection(line, line_num, file, findings);
         }

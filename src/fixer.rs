@@ -88,8 +88,13 @@ fn fix_file_pinning(content: &str, file: &str) -> anyhow::Result<(String, Vec<Fi
             // Resolve tag to SHA via GitHub API
             match resolve_tag_to_sha(action_name, tag) {
                 Ok(sha) => {
+                    // Strip any existing inline comment to avoid duplication
+                    let clean_suffix = suffix
+                        .find('#')
+                        .map(|_| "") // Drop old comment entirely
+                        .unwrap_or(suffix);
                     let new_line = format!(
-                        "{prefix}{action_name}@{sha}{suffix} # {tag}"
+                        "{prefix}{action_name}@{sha}{clean_suffix} # {tag}"
                     );
                     new_content.push_str(&new_line);
                     new_content.push('\n');
@@ -134,7 +139,10 @@ fn resolve_tag_to_sha(action: &str, tag: &str) -> anyhow::Result<String> {
     let repo = repo.split('/').next().unwrap_or(repo);
 
     let token = std::env::var("GITHUB_TOKEN").ok();
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .context("Failed to create HTTP client")?;
 
     // Try as a tag first, then as a branch
     for ref_type in ["tags", "heads"] {
@@ -164,7 +172,9 @@ fn resolve_tag_to_sha(action: &str, tag: &str) -> anyhow::Result<String> {
                 if obj_type == "tag" {
                     // Dereference annotated tag to get the commit SHA
                     let tag_url = obj["url"].as_str().unwrap_or("");
-                    if !tag_url.is_empty() {
+                    if !tag_url.is_empty()
+                        && tag_url.starts_with("https://api.github.com/")
+                    {
                         let mut tag_req = client
                             .get(tag_url)
                             .header("User-Agent", "depsec")
