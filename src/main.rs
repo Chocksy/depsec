@@ -6,6 +6,7 @@ mod monitor;
 mod output;
 mod parsers;
 mod preflight;
+mod rules;
 mod scanner;
 mod scoring;
 
@@ -93,10 +94,31 @@ enum Commands {
         json: bool,
     },
 
+    /// Manage detection rules
+    Rules {
+        #[command(subcommand)]
+        action: RulesAction,
+    },
+
     /// Output badge markdown
     Badge {
         /// Path to the project root
         #[arg(default_value = ".")]
+        path: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum RulesAction {
+    /// List all active rules
+    List,
+
+    /// Update rules from community repository
+    Update,
+
+    /// Add a custom rule file
+    Add {
+        /// Path to the rule file
         path: PathBuf,
     },
 }
@@ -249,6 +271,33 @@ fn main() -> ExitCode {
                     eprintln!("Error: {e}");
                     ExitCode::from(2)
                 }
+            }
+        }
+
+        Commands::Rules { action } => {
+            let root = std::env::current_dir().unwrap_or_else(|_| ".".into());
+            match action {
+                RulesAction::List => {
+                    rules::list_rules(&root);
+                    ExitCode::SUCCESS
+                }
+                RulesAction::Update => match rules::update_rules(&root) {
+                    Ok(count) => {
+                        println!("{count} rules updated.");
+                        ExitCode::SUCCESS
+                    }
+                    Err(e) => {
+                        eprintln!("Error: {e}");
+                        ExitCode::from(2)
+                    }
+                },
+                RulesAction::Add { path } => match rules::add_rule(&root, &path) {
+                    Ok(()) => ExitCode::SUCCESS,
+                    Err(e) => {
+                        eprintln!("Error: {e}");
+                        ExitCode::from(2)
+                    }
+                },
             }
         }
 
