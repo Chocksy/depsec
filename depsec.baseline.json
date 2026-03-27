@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "created": "2026-03-27",
+  "allowed_hosts": [
+    "api.github.com",
+    "api.osv.dev",
+    "crates.io",
+    "github.com",
+    "index.crates.io",
+    "objects.githubusercontent.com",
+    "pipelines.actions.githubusercontent.com",
+    "results-receiver.actions.githubusercontent.com",
+    "static.crates.io",
+    "static.rust-lang.org"
+  ]
+}

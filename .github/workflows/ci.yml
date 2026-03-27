@@ -40,5 +40,26 @@ jobs:
       - name: Build depsec
         run: cargo build --release
 
-      - name: Run depsec on itself
+      - name: Start network monitor
+        run: |
+          sudo tcpdump -i any -nn -q -l 2>/dev/null | grep -oP '\d+\.\d+\.\d+\.\d+' | sort -u > /tmp/depsec-capture.txt &
+          echo $! > /tmp/depsec-tcpdump.pid
+
+      - name: Run depsec on itself (static scan)
         run: ./target/release/depsec scan . --no-color
+
+      - name: Stop network monitor and check baseline
+        if: always()
+        run: |
+          if [ -f /tmp/depsec-tcpdump.pid ]; then
+            sudo kill "$(cat /tmp/depsec-tcpdump.pid)" 2>/dev/null || true
+            sleep 1
+          fi
+          echo "=== Captured network connections ==="
+          cat /tmp/depsec-capture.txt 2>/dev/null || echo "No connections captured"
+          echo "=== Baseline check ==="
+          if [ -f depsec.baseline.json ]; then
+            ./target/release/depsec baseline check --capture /tmp/depsec-capture.txt --no-color || true
+          else
+            echo "No baseline file — skipping network check"
+          fi
