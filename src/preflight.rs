@@ -474,11 +474,25 @@ fn check_package_metadata(packages: &[parsers::Package], findings: &mut Vec<Find
             Err(_) => continue,
         };
 
-        // Check publish date
+        // Check publish date — flag packages published very recently
         if let Some(published) = body.get("publishedAt").and_then(|p| p.as_str()) {
-            if let Ok(pub_date) = published.parse::<chrono_lite::NaiveDate>() {
-                // Simple check: if we can't parse, skip
-                let _ = pub_date; // We'd need chrono for proper date math
+            if is_recently_published(published, 7) {
+                findings.push(Finding {
+                    rule_id: "DEPSEC-T002".into(),
+                    severity: Severity::Medium,
+                    message: format!(
+                        "Package {} {} was published recently ({})",
+                        pkg.name,
+                        pkg.version,
+                        &published[..10_usize.min(published.len())]
+                    ),
+                    file: None,
+                    line: None,
+                    suggestion: Some(
+                        "Newly published packages near popular names may be typosquats".into(),
+                    ),
+                    auto_fixable: false,
+                });
             }
         }
 
@@ -515,16 +529,47 @@ fn urlencoded(s: &str) -> String {
     s.replace('@', "%40").replace('/', "%2F")
 }
 
-// Placeholder for date parsing without chrono dependency
-mod chrono_lite {
-    pub struct NaiveDate;
-
-    impl std::str::FromStr for NaiveDate {
-        type Err = String;
-        fn from_str(_s: &str) -> Result<Self, Self::Err> {
-            Err("not implemented".into())
-        }
+/// Check if an ISO 8601 date string is within `days` of today.
+/// Simple implementation without chrono dependency.
+fn is_recently_published(date_str: &str, days: u64) -> bool {
+    // Parse "2026-03-27T..." — extract YYYY-MM-DD
+    if date_str.len() < 10 {
+        return false;
     }
+    let date_part = &date_str[..10];
+    let parts: Vec<&str> = date_part.split('-').collect();
+    if parts.len() != 3 {
+        return false;
+    }
+
+    let year: i64 = parts[0].parse().unwrap_or(0);
+    let month: i64 = parts[1].parse().unwrap_or(0);
+    let day: i64 = parts[2].parse().unwrap_or(0);
+
+    // Get today's date
+    let today = std::process::Command::new("date")
+        .arg("+%Y-%m-%d")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .unwrap_or_default();
+    let today = today.trim();
+
+    let today_parts: Vec<&str> = today.split('-').collect();
+    if today_parts.len() != 3 {
+        return false;
+    }
+
+    let ty: i64 = today_parts[0].parse().unwrap_or(0);
+    let tm: i64 = today_parts[1].parse().unwrap_or(0);
+    let td: i64 = today_parts[2].parse().unwrap_or(0);
+
+    // Approximate days difference (not perfect but good enough)
+    let pub_days = year * 365 + month * 30 + day;
+    let today_days = ty * 365 + tm * 30 + td;
+    let diff = today_days - pub_days;
+
+    diff >= 0 && diff <= days as i64
 }
 
 fn print_preflight_result(result: &PreflightResult) {
@@ -582,8 +627,8 @@ mod tests {
 
     #[test]
     fn test_levenshtein_one_char() {
-        assert_eq!(levenshtein("lodash", "lodas"), 1);   // deletion
-        assert_eq!(levenshtein("lodash", "lodahs"), 2);  // transposition = 2 ops in Levenshtein
+        assert_eq!(levenshtein("lodash", "lodas"), 1); // deletion
+        assert_eq!(levenshtein("lodash", "lodahs"), 2); // transposition = 2 ops in Levenshtein
         assert_eq!(levenshtein("lodash", "lodashh"), 1); // insertion
     }
 

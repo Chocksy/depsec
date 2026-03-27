@@ -128,7 +128,7 @@ pub fn check_baseline(
     let mut critical_violations = Vec::new();
 
     for host in &captured_hosts {
-        if always_block.iter().any(|b| host.contains(b)) {
+        if always_block.iter().any(|b| host == *b) {
             critical_violations.push(host.clone());
         } else if baseline.allowed_hosts.contains(host) {
             matched.push(host.clone());

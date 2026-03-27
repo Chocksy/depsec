@@ -242,10 +242,41 @@ fn determine_severity(vuln: &serde_json::Value) -> Severity {
 }
 
 fn extract_cvss_score(vector: &str) -> Option<f64> {
-    // Look for CVSS:3.x/... format or just a float
+    // Try bare float first
     if let Ok(score) = vector.parse::<f64>() {
         return Some(score);
     }
+
+    // Parse CVSS:3.x vector string — extract base score from metrics
+    // The score isn't embedded in the vector string itself, so we approximate
+    // from the impact metrics: AV (Attack Vector), AC (Attack Complexity),
+    // PR (Privileges Required), UI (User Interaction), S (Scope),
+    // C (Confidentiality), I (Integrity), A (Availability)
+    if vector.starts_with("CVSS:") {
+        let mut score = 5.0; // baseline
+
+        if vector.contains("AV:N") {
+            score += 1.5; // Network attack vector
+        }
+        if vector.contains("AC:L") {
+            score += 0.5; // Low complexity
+        }
+        if vector.contains("PR:N") {
+            score += 0.5; // No privileges needed
+        }
+        if vector.contains("C:H") {
+            score += 1.0; // High confidentiality impact
+        }
+        if vector.contains("I:H") {
+            score += 0.5; // High integrity impact
+        }
+        if vector.contains("A:H") {
+            score += 0.5; // High availability impact
+        }
+
+        return Some(if score > 10.0 { 10.0 } else { score });
+    }
+
     None
 }
 

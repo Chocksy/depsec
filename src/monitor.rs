@@ -134,7 +134,7 @@ pub fn run_monitor(
     let mut critical = Vec::new();
 
     for conn in &all_connections {
-        if ALWAYS_BLOCK.iter().any(|b| conn.remote_host.contains(b)) {
+        if ALWAYS_BLOCK.iter().any(|b| conn.remote_host == *b) {
             critical.push(conn.clone());
         } else if is_expected_connection(conn, &defaults, &user_allowed) {
             expected.push(conn.clone());
