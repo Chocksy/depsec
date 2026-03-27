@@ -7,8 +7,11 @@ mod output;
 mod parsers;
 mod preflight;
 mod rules;
+mod sarif;
 mod scanner;
 mod scoring;
+mod selfcheck;
+mod shellhook;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -41,6 +44,10 @@ enum Commands {
         /// Output as JSON
         #[arg(long)]
         json: bool,
+
+        /// Output format: human (default), json, sarif
+        #[arg(long, value_name = "FORMAT")]
+        format: Option<String>,
     },
 
     /// Auto-fix security issues
@@ -100,6 +107,16 @@ enum Commands {
         action: RulesAction,
     },
 
+    /// Verify depsec's own integrity
+    SelfCheck {
+        /// Path to the project root
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
+
+    /// Generate shell aliases for invisible protection
+    ShellHook,
+
     /// Output badge markdown
     Badge {
         /// Path to the project root
@@ -155,7 +172,12 @@ fn main() -> ExitCode {
     let color = use_color(cli.no_color);
 
     match cli.command {
-        Commands::Scan { path, checks, json } => {
+        Commands::Scan {
+            path,
+            checks,
+            json,
+            format,
+        } => {
             let root = match path.canonicalize() {
                 Ok(p) => p,
                 Err(e) => {
@@ -169,16 +191,27 @@ fn main() -> ExitCode {
 
             match scanner::run_scan(&root, &config, filter) {
                 Ok(report) => {
-                    if json {
-                        match output::render_json(&report) {
+                    let fmt = format
+                        .as_deref()
+                        .unwrap_or(if json { "json" } else { "human" });
+                    match fmt {
+                        "json" => match output::render_json(&report) {
                             Ok(json_str) => println!("{json_str}"),
                             Err(e) => {
                                 eprintln!("Error rendering JSON: {e}");
                                 return ExitCode::from(2);
                             }
+                        },
+                        "sarif" => match sarif::render_sarif(&report) {
+                            Ok(sarif_str) => println!("{sarif_str}"),
+                            Err(e) => {
+                                eprintln!("Error rendering SARIF: {e}");
+                                return ExitCode::from(2);
+                            }
+                        },
+                        _ => {
+                            print!("{}", output::render_human(&report, color));
                         }
-                    } else {
-                        print!("{}", output::render_human(&report, color));
                     }
 
                     let has_findings = report.results.iter().any(|r| !r.findings.is_empty());
@@ -342,6 +375,23 @@ fn main() -> ExitCode {
                 }
             }
         },
+
+        Commands::SelfCheck { path } => {
+            let root = match path.canonicalize() {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("Error: invalid path '{}': {e}", path.display());
+                    return ExitCode::from(2);
+                }
+            };
+            selfcheck::run_self_check(&root);
+            ExitCode::SUCCESS
+        }
+
+        Commands::ShellHook => {
+            print!("{}", shellhook::generate_shell_hook());
+            ExitCode::SUCCESS
+        }
 
         Commands::Badge { path } => {
             let root = match path.canonicalize() {
