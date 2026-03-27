@@ -2,6 +2,7 @@ mod baseline;
 mod checks;
 mod config;
 mod fixer;
+mod monitor;
 mod output;
 mod parsers;
 mod scanner;
@@ -55,6 +56,29 @@ enum Commands {
     Baseline {
         #[command(subcommand)]
         action: BaselineAction,
+    },
+
+    /// Monitor network activity of a command
+    Monitor {
+        /// Record connections as expected (learning mode)
+        #[arg(long)]
+        learn: bool,
+
+        /// Fail on unexpected connections
+        #[arg(long)]
+        strict: bool,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+
+        /// Path to baseline file
+        #[arg(long)]
+        baseline: Option<PathBuf>,
+
+        /// Command and arguments to monitor
+        #[arg(trailing_var_arg = true, required = true)]
+        command: Vec<String>,
     },
 
     /// Output badge markdown
@@ -163,6 +187,28 @@ fn main() -> ExitCode {
                 }
             }
         }
+
+        Commands::Monitor {
+            learn,
+            strict,
+            json,
+            baseline,
+            command,
+        } => match monitor::run_monitor(&command, baseline.as_deref(), learn, json) {
+            Ok(result) => {
+                let has_critical = !result.critical.is_empty();
+                let has_unexpected = !result.unexpected.is_empty();
+                if has_critical || (strict && has_unexpected) {
+                    ExitCode::from(1)
+                } else {
+                    ExitCode::from(result.exit_code as u8)
+                }
+            }
+            Err(e) => {
+                eprintln!("Error: {e}");
+                ExitCode::from(2)
+            }
+        },
 
         Commands::Baseline { action } => match action {
             BaselineAction::Init { path } => {
