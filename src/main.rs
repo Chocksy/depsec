@@ -5,6 +5,7 @@ mod fixer;
 mod monitor;
 mod output;
 mod parsers;
+mod preflight;
 mod scanner;
 mod scoring;
 
@@ -79,6 +80,17 @@ enum Commands {
         /// Command and arguments to monitor
         #[arg(trailing_var_arg = true, required = true)]
         command: Vec<String>,
+    },
+
+    /// Pre-install threat analysis
+    Preflight {
+        /// Path to the project root
+        #[arg(default_value = ".")]
+        path: PathBuf,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
     },
 
     /// Output badge markdown
@@ -209,6 +221,36 @@ fn main() -> ExitCode {
                 ExitCode::from(2)
             }
         },
+
+        Commands::Preflight { path, json } => {
+            let root = match path.canonicalize() {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("Error: invalid path '{}': {e}", path.display());
+                    return ExitCode::from(2);
+                }
+            };
+
+            match preflight::run_preflight(&root, json) {
+                Ok(result) => {
+                    let has_high = result.findings.iter().any(|f| {
+                        matches!(
+                            f.severity,
+                            crate::checks::Severity::Critical | crate::checks::Severity::High
+                        )
+                    });
+                    if has_high {
+                        ExitCode::from(1)
+                    } else {
+                        ExitCode::SUCCESS
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    ExitCode::from(2)
+                }
+            }
+        }
 
         Commands::Baseline { action } => match action {
             BaselineAction::Init { path } => {
