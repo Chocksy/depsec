@@ -8,7 +8,8 @@ enabled = ["workflows", "deps", "patterns", "secrets", "hygiene"]
 
 [scoring]
 workflows = 25
-deps = 30
+deps = 20
+patterns = 10
 secrets = 25
 hygiene = 10
 network = 10

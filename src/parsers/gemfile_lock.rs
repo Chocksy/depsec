@@ -10,22 +10,25 @@ use super::{Ecosystem, Package};
 pub fn parse(path: &Path) -> anyhow::Result<Vec<Package>> {
     let content = std::fs::read_to_string(path).context("Failed to read Gemfile.lock")?;
     let mut packages = Vec::new();
+    let mut in_gem_section = false;
     let mut in_gem_specs = false;
 
     for line in content.lines() {
-        // Detect GEM section
-        if line == "GEM" {
+        // Track which top-level section we're in
+        if !line.starts_with(' ') && !line.is_empty() {
+            in_gem_section = line == "GEM";
+            in_gem_specs = false;
             continue;
         }
 
-        // Detect specs: subsection
-        if line.trim() == "specs:" {
+        // Only look for specs: within the GEM section
+        if in_gem_section && line.trim() == "specs:" {
             in_gem_specs = true;
             continue;
         }
 
-        // End of section (non-indented line after specs)
-        if in_gem_specs && !line.starts_with(' ') && !line.is_empty() {
+        // End of specs subsection (unindented within GEM section)
+        if in_gem_specs && !line.starts_with("  ") && !line.is_empty() {
             in_gem_specs = false;
             continue;
         }

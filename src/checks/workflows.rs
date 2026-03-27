@@ -240,9 +240,10 @@ fn check_expression_injection(content: &str, file: &str, findings: &mut Vec<Find
 
 fn check_line_for_injection(line: &str, line_num: usize, file: &str, findings: &mut Vec<Finding>) {
     for expr in INJECTION_EXPRESSIONS {
-        // Match ${{ <expression> }} pattern
-        let pattern = format!("${{{{ {expr}");
-        if line.contains(&pattern) {
+        // Match both "${{ expr }}" (with space) and "${{expr}}" (without space)
+        let pattern_spaced = format!("${{{{ {expr}");
+        let pattern_compact = format!("${{{{{expr}");
+        if line.contains(&pattern_spaced) || line.contains(&pattern_compact) {
             findings.push(Finding {
                 rule_id: "DEPSEC-W004".into(),
                 severity: Severity::Critical,

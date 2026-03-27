@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::path::Path;
 
 use serde::Deserialize;
@@ -44,6 +43,7 @@ impl Default for ChecksConfig {
 pub struct ScoringConfig {
     pub workflows: u32,
     pub deps: u32,
+    pub patterns: u32,
     pub secrets: u32,
     pub hygiene: u32,
     pub network: u32,
@@ -53,7 +53,8 @@ impl Default for ScoringConfig {
     fn default() -> Self {
         Self {
             workflows: 25,
-            deps: 30,
+            deps: 20,
+            patterns: 10,
             secrets: 25,
             hygiene: 10,
             network: 10,
@@ -66,21 +67,12 @@ impl ScoringConfig {
         match category {
             "workflows" => self.workflows,
             "deps" => self.deps,
+            "patterns" => self.patterns,
             "secrets" => self.secrets,
             "hygiene" => self.hygiene,
             "network" => self.network,
             _ => 0,
         }
-    }
-
-    pub fn weights_map(&self) -> HashMap<String, u32> {
-        let mut m = HashMap::new();
-        m.insert("workflows".into(), self.workflows);
-        m.insert("deps".into(), self.deps);
-        m.insert("secrets".into(), self.secrets);
-        m.insert("hygiene".into(), self.hygiene);
-        m.insert("network".into(), self.network);
-        m
     }
 }
 
@@ -110,7 +102,8 @@ mod tests {
     fn test_default_config() {
         let config = Config::default();
         assert_eq!(config.scoring.workflows, 25);
-        assert_eq!(config.scoring.deps, 30);
+        assert_eq!(config.scoring.deps, 20);
+        assert_eq!(config.scoring.patterns, 10);
         assert_eq!(config.scoring.secrets, 25);
         assert_eq!(config.scoring.hygiene, 10);
         assert_eq!(config.scoring.network, 10);
@@ -148,7 +141,8 @@ network = 10
     fn test_weight_for() {
         let scoring = ScoringConfig::default();
         assert_eq!(scoring.weight_for("workflows"), 25);
-        assert_eq!(scoring.weight_for("deps"), 30);
+        assert_eq!(scoring.weight_for("deps"), 20);
+        assert_eq!(scoring.weight_for("patterns"), 10);
         assert_eq!(scoring.weight_for("unknown"), 0);
     }
 }

@@ -84,10 +84,7 @@ impl Check for PatternsCheck {
     }
 
     fn run(&self, ctx: &ScanContext) -> anyhow::Result<CheckResult> {
-        let max_score = ctx.config.scoring.weight_for("deps") as f64;
-        // Note: patterns shares weight with deps in the plan — using deps weight
-        // Actually per the spec, patterns is part of the deps category score
-        // For now, we'll report findings under deps but we can separate if needed
+        let max_score = ctx.config.scoring.weight_for("patterns") as f64;
 
         let ignored_rules: Vec<&str> = ctx
             .config
@@ -199,9 +196,7 @@ impl Check for PatternsCheck {
             pass_messages.push("No dependency directories found to scan".into());
         }
 
-        // Patterns findings contribute to the deps category in the plan,
-        // but we report them as a separate result for clarity
-        Ok(CheckResult::new("patterns", findings, 0.0, pass_messages))
+        Ok(CheckResult::new("patterns", findings, max_score, pass_messages))
     }
 }
 
@@ -279,7 +274,9 @@ fn truncate_line(line: &str, max: usize) -> String {
     if trimmed.len() <= max {
         trimmed.to_string()
     } else {
-        format!("{}...", &trimmed[..max])
+        // Safe UTF-8 boundary slicing
+        let truncated: String = trimmed.chars().take(max).collect();
+        format!("{truncated}...")
     }
 }
 
