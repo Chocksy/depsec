@@ -1,6 +1,4 @@
 [advisories]
-vulnerability = "deny"
-unmaintained = "warn"
 
 [licenses]
 allow = [
@@ -10,10 +8,7 @@ allow = [
     "BSD-3-Clause",
     "ISC",
     "Unicode-3.0",
-    "Unicode-DFS-2016",
-    "OpenSSL",
-    "Zlib",
-    "CC0-1.0",
+    "CDLA-Permissive-2.0",
 ]
 
 [sources]
