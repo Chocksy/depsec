@@ -208,12 +208,19 @@ impl Check for SecretsCheck {
         let file_count = files.len();
         let mut pass_messages = Vec::new();
         if findings.is_empty() {
-            pass_messages.push(format!("No hardcoded secrets found (scanned {file_count} files)"));
+            pass_messages.push(format!(
+                "No hardcoded secrets found (scanned {file_count} files)"
+            ));
         } else {
             pass_messages.push(format!("Scanned {file_count} files"));
         }
 
-        Ok(CheckResult::new("secrets", findings, max_score, pass_messages))
+        Ok(CheckResult::new(
+            "secrets",
+            findings,
+            max_score,
+            pass_messages,
+        ))
     }
 }
 
@@ -315,7 +322,9 @@ fn is_in_hidden_dir(path: &Path, root: &Path) -> bool {
 }
 
 fn is_large_file(path: &Path) -> bool {
-    path.metadata().map(|m| m.len() > 1_048_576).unwrap_or(false) // 1MB
+    path.metadata()
+        .map(|m| m.len() > 1_048_576)
+        .unwrap_or(false) // 1MB
 }
 
 fn mask_secret(line: &str, re: &Regex) -> String {
@@ -381,10 +390,7 @@ mod tests {
 
     #[test]
     fn test_aws_key_detected() {
-        let dir = setup_project(&[(
-            "config.py",
-            "AWS_ACCESS_KEY_ID = 'AKIAIOSFODNN7EXAMPLE'",
-        )]);
+        let dir = setup_project(&[("config.py", "AWS_ACCESS_KEY_ID = 'AKIAIOSFODNN7EXAMPLE'")]);
         let config = Config::default();
         let ctx = ScanContext {
             root: dir.path(),
@@ -397,8 +403,10 @@ mod tests {
 
     #[test]
     fn test_github_token_detected() {
-        let dir =
-            setup_project(&[("env.sh", "export TOKEN=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklm")]);
+        let dir = setup_project(&[(
+            "env.sh",
+            "export TOKEN=ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklm",
+        )]);
         let config = Config::default();
         let ctx = ScanContext {
             root: dir.path(),
@@ -410,7 +418,10 @@ mod tests {
 
     #[test]
     fn test_private_key_detected() {
-        let dir = setup_project(&[("key.pem", "-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----")]);
+        let dir = setup_project(&[(
+            "key.pem",
+            "-----BEGIN RSA PRIVATE KEY-----\nMIIE...\n-----END RSA PRIVATE KEY-----",
+        )]);
         let config = Config::default();
         let ctx = ScanContext {
             root: dir.path(),
@@ -452,10 +463,7 @@ mod tests {
 
     #[test]
     fn test_ignore_path_respected() {
-        let dir = setup_project(&[(
-            "tests/fixtures/secrets.txt",
-            "AKIAIOSFODNN7EXAMPLE",
-        )]);
+        let dir = setup_project(&[("tests/fixtures/secrets.txt", "AKIAIOSFODNN7EXAMPLE")]);
         let mut config = Config::default();
         config.ignore.secrets = vec!["tests/fixtures/*".into()];
         let ctx = ScanContext {

@@ -246,7 +246,10 @@ fn cvss_to_severity(score: f64) -> Severity {
     }
 }
 
-fn extract_fix_version(vuln: &serde_json::Value, _ecosystem: &parsers::Ecosystem) -> Option<String> {
+fn extract_fix_version(
+    vuln: &serde_json::Value,
+    _ecosystem: &parsers::Ecosystem,
+) -> Option<String> {
     // Try to find a fixed version from the "affected" array
     if let Some(affected) = vuln.get("affected").and_then(|a| a.as_array()) {
         for entry in affected {

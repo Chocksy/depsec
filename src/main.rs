@@ -123,10 +123,7 @@ fn main() -> ExitCode {
                         print!("{}", output::render_human(&report, color));
                     }
 
-                    let has_findings = report
-                        .results
-                        .iter()
-                        .any(|r| !r.findings.is_empty());
+                    let has_findings = report.results.iter().any(|r| !r.findings.is_empty());
 
                     if has_findings {
                         ExitCode::from(1)
@@ -192,10 +189,7 @@ fn main() -> ExitCode {
             BaselineAction::Check { capture } => {
                 let root = std::env::current_dir().unwrap_or_else(|_| ".".into());
 
-                match baseline::check_baseline(
-                    &root,
-                    capture.as_deref(),
-                ) {
+                match baseline::check_baseline(&root, capture.as_deref()) {
                     Ok(result) => {
                         baseline::print_baseline_check(&result, color);
                         if result.passed() {

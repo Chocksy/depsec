@@ -24,7 +24,12 @@ impl Check for HygieneCheck {
         // DEPSEC-H004: Branch protection (optional, requires GITHUB_TOKEN)
         check_branch_protection(ctx, &mut findings, &mut pass_messages);
 
-        Ok(CheckResult::new("hygiene", findings, max_score, pass_messages))
+        Ok(CheckResult::new(
+            "hygiene",
+            findings,
+            max_score,
+            pass_messages,
+        ))
     }
 }
 
@@ -108,7 +113,11 @@ fn gitignore_contains(content: &str, pattern: &str) -> bool {
     })
 }
 
-fn check_lockfile_committed(ctx: &ScanContext, findings: &mut Vec<Finding>, pass: &mut Vec<String>) {
+fn check_lockfile_committed(
+    ctx: &ScanContext,
+    findings: &mut Vec<Finding>,
+    pass: &mut Vec<String>,
+) {
     let lockfiles = [
         "Cargo.lock",
         "package-lock.json",
@@ -156,11 +165,7 @@ fn check_lockfile_committed(ctx: &ScanContext, findings: &mut Vec<Finding>, pass
     }
 }
 
-fn check_branch_protection(
-    ctx: &ScanContext,
-    findings: &mut Vec<Finding>,
-    pass: &mut Vec<String>,
-) {
+fn check_branch_protection(ctx: &ScanContext, findings: &mut Vec<Finding>, pass: &mut Vec<String>) {
     let token = match std::env::var("GITHUB_TOKEN") {
         Ok(t) if !t.is_empty() => t,
         _ => {
@@ -176,9 +181,7 @@ fn check_branch_protection(
         .output();
 
     let remote_url = match output {
-        Ok(out) if out.status.success() => {
-            String::from_utf8_lossy(&out.stdout).trim().to_string()
-        }
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim().to_string(),
         _ => return, // No remote — skip
     };
 
@@ -189,9 +192,7 @@ fn check_branch_protection(
 
     // Check branch protection via API
     let client = reqwest::blocking::Client::new();
-    let url = format!(
-        "https://api.github.com/repos/{owner}/{repo}/branches/main/protection"
-    );
+    let url = format!("https://api.github.com/repos/{owner}/{repo}/branches/main/protection");
 
     let resp = client
         .get(&url)
@@ -278,17 +279,17 @@ mod tests {
 
     #[test]
     fn test_security_md_found() {
-        let dir = setup_repo(&[("SECURITY.md", "# Security Policy\nReport to security@example.com")]);
+        let dir = setup_repo(&[(
+            "SECURITY.md",
+            "# Security Policy\nReport to security@example.com",
+        )]);
         let config = Config::default();
         let ctx = ScanContext {
             root: dir.path(),
             config: &config,
         };
         let result = HygieneCheck.run(&ctx).unwrap();
-        assert!(!result
-            .findings
-            .iter()
-            .any(|f| f.rule_id == "DEPSEC-H001"));
+        assert!(!result.findings.iter().any(|f| f.rule_id == "DEPSEC-H001"));
     }
 
     #[test]
@@ -300,10 +301,7 @@ mod tests {
             config: &config,
         };
         let result = HygieneCheck.run(&ctx).unwrap();
-        assert!(result
-            .findings
-            .iter()
-            .any(|f| f.rule_id == "DEPSEC-H001"));
+        assert!(result.findings.iter().any(|f| f.rule_id == "DEPSEC-H001"));
     }
 
     #[test]
@@ -315,10 +313,7 @@ mod tests {
             config: &config,
         };
         let result = HygieneCheck.run(&ctx).unwrap();
-        assert!(!result
-            .findings
-            .iter()
-            .any(|f| f.rule_id == "DEPSEC-H002"));
+        assert!(!result.findings.iter().any(|f| f.rule_id == "DEPSEC-H002"));
     }
 
     #[test]
@@ -330,10 +325,7 @@ mod tests {
             config: &config,
         };
         let result = HygieneCheck.run(&ctx).unwrap();
-        assert!(result
-            .findings
-            .iter()
-            .any(|f| f.rule_id == "DEPSEC-H002"));
+        assert!(result.findings.iter().any(|f| f.rule_id == "DEPSEC-H002"));
     }
 
     #[test]

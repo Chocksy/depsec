@@ -30,14 +30,10 @@ impl Default for Baseline {
 
 fn chrono_date() -> String {
     // Simple date without chrono dependency
-    let output = std::process::Command::new("date")
-        .arg("+%Y-%m-%d")
-        .output();
+    let output = std::process::Command::new("date").arg("+%Y-%m-%d").output();
 
     match output {
-        Ok(out) if out.status.success() => {
-            String::from_utf8_lossy(&out.stdout).trim().to_string()
-        }
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim().to_string(),
         _ => "unknown".to_string(),
     }
 }
@@ -109,14 +105,11 @@ pub fn check_baseline(
 ) -> anyhow::Result<BaselineCheckResult> {
     let baseline_path = root.join(BASELINE_FILENAME);
     if !baseline_path.exists() {
-        anyhow::bail!(
-            "No baseline file found. Run 'depsec baseline init' to create one."
-        );
+        anyhow::bail!("No baseline file found. Run 'depsec baseline init' to create one.");
     }
 
     let content = std::fs::read_to_string(&baseline_path).context("Failed to read baseline")?;
-    let baseline: Baseline =
-        serde_json::from_str(&content).context("Failed to parse baseline")?;
+    let baseline: Baseline = serde_json::from_str(&content).context("Failed to parse baseline")?;
 
     // If capture file is provided, parse it
     let captured_hosts = match capture_path {
@@ -176,12 +169,20 @@ pub fn print_baseline_check(result: &BaselineCheckResult, use_color: bool) {
     println!("[Network Monitor]");
 
     for host in &result.matched {
-        let icon = if use_color { "\x1b[32m✓\x1b[0m" } else { "✓" };
+        let icon = if use_color {
+            "\x1b[32m✓\x1b[0m"
+        } else {
+            "✓"
+        };
         println!("  {icon} {host} — in baseline");
     }
 
     for host in &result.violations {
-        let icon = if use_color { "\x1b[31m✗\x1b[0m" } else { "✗" };
+        let icon = if use_color {
+            "\x1b[31m✗\x1b[0m"
+        } else {
+            "✗"
+        };
         println!("  {icon} {host} — NOT in baseline!");
     }
 

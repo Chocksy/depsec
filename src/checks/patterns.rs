@@ -58,10 +58,8 @@ const PATTERN_RULES: &[PatternRule] = &[
 ];
 
 const BINARY_EXTENSIONS: &[&str] = &[
-    ".node", ".so", ".dll", ".dylib", ".wasm", ".exe", ".bin",
-    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg",
-    ".ttf", ".woff", ".woff2", ".eot",
-    ".zip", ".tar", ".gz", ".bz2",
+    ".node", ".so", ".dll", ".dylib", ".wasm", ".exe", ".bin", ".png", ".jpg", ".jpeg", ".gif",
+    ".bmp", ".ico", ".svg", ".ttf", ".woff", ".woff2", ".eot", ".zip", ".tar", ".gz", ".bz2",
     ".pdf", ".doc", ".docx",
 ];
 
@@ -165,9 +163,7 @@ impl Check for PatternsCheck {
                                 message: format!("{}: {snippet}", rule.description),
                                 file: Some(rel_path.clone()),
                                 line: Some(line_num + 1),
-                                suggestion: Some(format!(
-                                    "Review or remove this dependency"
-                                )),
+                                suggestion: Some("Review or remove this dependency".into()),
                                 auto_fixable: false,
                             });
                         }
@@ -183,8 +179,9 @@ impl Check for PatternsCheck {
 
         if scanned_files > 0 {
             if findings.is_empty() {
-                pass_messages
-                    .push(format!("0 suspicious patterns found ({scanned_files} dependency files scanned)"));
+                pass_messages.push(format!(
+                    "0 suspicious patterns found ({scanned_files} dependency files scanned)"
+                ));
             } else {
                 pass_messages.push(format!(
                     "{} suspicious pattern{} found ({scanned_files} files scanned)",
@@ -196,7 +193,12 @@ impl Check for PatternsCheck {
             pass_messages.push("No dependency directories found to scan".into());
         }
 
-        Ok(CheckResult::new("patterns", findings, max_score, pass_messages))
+        Ok(CheckResult::new(
+            "patterns",
+            findings,
+            max_score,
+            pass_messages,
+        ))
     }
 }
 
@@ -211,10 +213,7 @@ fn is_binary_ext(path: &Path) -> bool {
 
 fn is_install_script(path: &Path, _line: &str) -> bool {
     // P006 only applies to install scripts (postinstall.sh, preinstall.sh, package.json scripts)
-    let filename = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
+    let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     filename == "postinstall.sh"
         || filename == "preinstall.sh"
         || filename == "install.sh"
@@ -241,9 +240,7 @@ fn check_entropy(content: &str, file: &str, findings: &mut Vec<Finding>) {
                         ),
                         file: Some(file.into()),
                         line: Some(line_num + 1),
-                        suggestion: Some(
-                            "Review this string — may be an encoded payload".into(),
-                        ),
+                        suggestion: Some("Review this string — may be an encoded payload".into()),
                         auto_fixable: false,
                     });
                     break; // One finding per line is enough

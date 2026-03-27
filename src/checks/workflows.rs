@@ -96,7 +96,12 @@ impl Check for WorkflowsCheck {
             pass_messages.push("No dangerous git flags found".into());
         }
 
-        Ok(CheckResult::new("workflows", findings, max_score, pass_messages))
+        Ok(CheckResult::new(
+            "workflows",
+            findings,
+            max_score,
+            pass_messages,
+        ))
     }
 }
 
@@ -149,7 +154,7 @@ fn check_permissions(content: &str, file: &str, findings: &mut Vec<Finding>) {
     };
 
     // Check top-level permissions
-    match mapping.get(&serde_yaml::Value::String("permissions".into())) {
+    match mapping.get(serde_yaml::Value::String("permissions".into())) {
         None => {
             findings.push(Finding {
                 rule_id: "DEPSEC-W002".into(),
@@ -218,11 +223,13 @@ fn check_expression_injection(content: &str, file: &str, findings: &mut Vec<Find
         let trimmed = line.trim();
 
         // Detect `run:` lines (may appear as `run:` or `- run:`)
-        let is_run_line = trimmed.starts_with("run:")
-            || trimmed.starts_with("- run:");
+        let is_run_line = trimmed.starts_with("run:") || trimmed.starts_with("- run:");
         if is_run_line {
             // Detect block scalar indicators: |, |-, |+, >, >-, >+
-            let after_run = trimmed.split_once("run:").map(|(_, r)| r.trim()).unwrap_or("");
+            let after_run = trimmed
+                .split_once("run:")
+                .map(|(_, r)| r.trim())
+                .unwrap_or("");
             in_run_block = after_run.starts_with('|') || after_run.starts_with('>');
             run_indent = line.len() - line.trim_start().len();
             check_line_for_injection(line, line_num, file, findings);
@@ -254,9 +261,7 @@ fn check_line_for_injection(line: &str, line_num: usize, file: &str, findings: &
             findings.push(Finding {
                 rule_id: "DEPSEC-W004".into(),
                 severity: Severity::Critical,
-                message: format!(
-                    "User-controlled expression in run block: ${{{{ {expr} }}}}"
-                ),
+                message: format!("User-controlled expression in run block: ${{{{ {expr} }}}}"),
                 file: Some(file.into()),
                 line: Some(line_num + 1),
                 suggestion: Some(

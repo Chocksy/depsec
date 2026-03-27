@@ -128,7 +128,9 @@ version = "3.0.0"
 
         let packages = parse_poetry(&lock).unwrap();
         assert_eq!(packages.len(), 2);
-        assert!(packages.iter().any(|p| p.name == "requests" && p.version == "2.31.0"));
+        assert!(packages
+            .iter()
+            .any(|p| p.name == "requests" && p.version == "2.31.0"));
     }
 
     #[test]
@@ -152,8 +154,12 @@ version = "3.0.0"
 
         let packages = parse_pipfile(&lock).unwrap();
         assert_eq!(packages.len(), 3);
-        assert!(packages.iter().any(|p| p.name == "requests" && p.version == "2.31.0"));
-        assert!(packages.iter().any(|p| p.name == "pytest" && p.version == "7.4.0"));
+        assert!(packages
+            .iter()
+            .any(|p| p.name == "requests" && p.version == "2.31.0"));
+        assert!(packages
+            .iter()
+            .any(|p| p.name == "pytest" && p.version == "7.4.0"));
     }
 
     #[test]
@@ -173,7 +179,11 @@ pandas
 
         let packages = parse_requirements(&req).unwrap();
         assert_eq!(packages.len(), 2); // Only pinned entries
-        assert!(packages.iter().any(|p| p.name == "requests" && p.version == "2.31.0"));
-        assert!(packages.iter().any(|p| p.name == "flask" && p.version == "3.0.0"));
+        assert!(packages
+            .iter()
+            .any(|p| p.name == "requests" && p.version == "2.31.0"));
+        assert!(packages
+            .iter()
+            .any(|p| p.name == "flask" && p.version == "3.0.0"));
     }
 }

@@ -90,9 +90,7 @@ pub fn parse_yarn(path: &Path) -> anyhow::Result<Vec<Package>> {
 
         // Version line within a package block
         if trimmed.starts_with("version ") && current_name.is_some() {
-            let version = trimmed
-                .trim_start_matches("version ")
-                .trim_matches('"');
+            let version = trimmed.trim_start_matches("version ").trim_matches('"');
             if let Some(name) = current_name.take() {
                 packages.push(Package {
                     name,
@@ -127,10 +125,10 @@ pub fn parse_pnpm(path: &Path) -> anyhow::Result<Vec<Package>> {
             let entry = key_str.trim_start_matches('/');
 
             // Handle scoped packages (@scope/name)
-            let (name, version) = if entry.starts_with('@') {
+            let (name, version) = if let Some(rest) = entry.strip_prefix('@') {
                 // @scope/name@version
-                if let Some(at_pos) = entry[1..].rfind('@') {
-                    let at_pos = at_pos + 1; // Adjust for the skipped @
+                if let Some(at_pos) = rest.rfind('@') {
+                    let at_pos = at_pos + 1; // Adjust for the stripped @
                     (&entry[..at_pos], &entry[at_pos + 1..])
                 } else {
                     continue;
@@ -184,7 +182,9 @@ mod tests {
 
         let packages = parse_npm(&lock).unwrap();
         assert_eq!(packages.len(), 2);
-        assert!(packages.iter().any(|p| p.name == "lodash" && p.version == "4.17.21"));
+        assert!(packages
+            .iter()
+            .any(|p| p.name == "lodash" && p.version == "4.17.21"));
         assert!(packages.iter().any(|p| p.name == "express"));
     }
 
@@ -230,7 +230,9 @@ express@^4.18.0:
 
         let packages = parse_yarn(&lock).unwrap();
         assert_eq!(packages.len(), 2);
-        assert!(packages.iter().any(|p| p.name == "lodash" && p.version == "4.17.21"));
+        assert!(packages
+            .iter()
+            .any(|p| p.name == "lodash" && p.version == "4.17.21"));
     }
 
     #[test]
@@ -251,7 +253,11 @@ packages:
 
         let packages = parse_pnpm(&lock).unwrap();
         assert_eq!(packages.len(), 2);
-        assert!(packages.iter().any(|p| p.name == "lodash" && p.version == "4.17.21"));
-        assert!(packages.iter().any(|p| p.name == "@types/node" && p.version == "18.0.0"));
+        assert!(packages
+            .iter()
+            .any(|p| p.name == "lodash" && p.version == "4.17.21"));
+        assert!(packages
+            .iter()
+            .any(|p| p.name == "@types/node" && p.version == "18.0.0"));
     }
 }

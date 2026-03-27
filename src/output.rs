@@ -40,15 +40,16 @@ pub fn render_human(report: &ScanReport, use_color: bool) -> String {
 
     for result in &report.results {
         out.push('\n');
-        out.push_str(&format!(
-            "[{}]\n",
-            capitalize(&result.category)
-        ));
+        out.push_str(&format!("[{}]\n", capitalize(&result.category)));
 
         for msg in &result.pass_messages {
             out.push_str(&format!(
                 "  {} {}\n",
-                if use_color { "\x1b[32m✓\x1b[0m" } else { "✓" },
+                if use_color {
+                    "\x1b[32m✓\x1b[0m"
+                } else {
+                    "✓"
+                },
                 msg
             ));
         }
@@ -77,10 +78,7 @@ pub fn render_human(report: &ScanReport, use_color: bool) -> String {
                 _ => String::new(),
             };
 
-            out.push_str(&format!(
-                "  {} {}{}\n",
-                icon, finding.message, location
-            ));
+            out.push_str(&format!("  {} {}{}\n", icon, finding.message, location));
 
             if let Some(suggestion) = &finding.suggestion {
                 out.push_str(&format!("    → {suggestion}\n"));

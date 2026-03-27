@@ -12,10 +12,7 @@ pub struct FixResult {
     pub applied: bool,
 }
 
-pub fn fix_workflow_pinning(
-    root: &Path,
-    dry_run: bool,
-) -> anyhow::Result<Vec<FixResult>> {
+pub fn fix_workflow_pinning(root: &Path, dry_run: bool) -> anyhow::Result<Vec<FixResult>> {
     let workflows_dir = root.join(".github").join("workflows");
     if !workflows_dir.exists() {
         return Ok(vec![]);
@@ -93,9 +90,7 @@ fn fix_file_pinning(content: &str, file: &str) -> anyhow::Result<(String, Vec<Fi
                         .find('#')
                         .map(|_| "") // Drop old comment entirely
                         .unwrap_or(suffix);
-                    let new_line = format!(
-                        "{prefix}{action_name}@{sha}{clean_suffix} # {tag}"
-                    );
+                    let new_line = format!("{prefix}{action_name}@{sha}{clean_suffix} # {tag}");
                     new_content.push_str(&new_line);
                     new_content.push('\n');
 
@@ -146,9 +141,7 @@ fn resolve_tag_to_sha(action: &str, tag: &str) -> anyhow::Result<String> {
 
     // Try as a tag first, then as a branch
     for ref_type in ["tags", "heads"] {
-        let url = format!(
-            "https://api.github.com/repos/{owner}/{repo}/git/ref/{ref_type}/{tag}"
-        );
+        let url = format!("https://api.github.com/repos/{owner}/{repo}/git/ref/{ref_type}/{tag}");
 
         let mut req = client
             .get(&url)
@@ -172,9 +165,7 @@ fn resolve_tag_to_sha(action: &str, tag: &str) -> anyhow::Result<String> {
                 if obj_type == "tag" {
                     // Dereference annotated tag to get the commit SHA
                     let tag_url = obj["url"].as_str().unwrap_or("");
-                    if !tag_url.is_empty()
-                        && tag_url.starts_with("https://api.github.com/")
-                    {
+                    if !tag_url.is_empty() && tag_url.starts_with("https://api.github.com/") {
                         let mut tag_req = client
                             .get(tag_url)
                             .header("User-Agent", "depsec")
@@ -214,7 +205,12 @@ pub fn print_fix_results(results: &[FixResult], dry_run: bool) {
         if result.applied {
             println!(
                 "{prefix}Fixed: {} — {}@{} → {}@{} # {}",
-                result.file, result.action, result.old_ref, result.action, result.new_sha, result.old_ref
+                result.file,
+                result.action,
+                result.old_ref,
+                result.action,
+                result.new_sha,
+                result.old_ref
             );
         } else {
             println!(

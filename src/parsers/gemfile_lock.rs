@@ -43,9 +43,7 @@ pub fn parse(path: &Path) -> anyhow::Result<Vec<Package>> {
         let trimmed = line.trim();
         if line.starts_with("    ") && !line.starts_with("      ") {
             if let Some((name, rest)) = trimmed.split_once(' ') {
-                let version = rest
-                    .trim_start_matches('(')
-                    .trim_end_matches(')');
+                let version = rest.trim_start_matches('(').trim_end_matches(')');
                 packages.push(Package {
                     name: name.to_string(),
                     version: version.to_string(),
@@ -95,9 +93,15 @@ BUNDLED WITH
 
         let packages = parse(&lock).unwrap();
         assert_eq!(packages.len(), 3);
-        assert!(packages.iter().any(|p| p.name == "actioncable" && p.version == "7.1.3"));
-        assert!(packages.iter().any(|p| p.name == "actionpack" && p.version == "7.1.3"));
-        assert!(packages.iter().any(|p| p.name == "rack" && p.version == "3.0.8"));
+        assert!(packages
+            .iter()
+            .any(|p| p.name == "actioncable" && p.version == "7.1.3"));
+        assert!(packages
+            .iter()
+            .any(|p| p.name == "actionpack" && p.version == "7.1.3"));
+        assert!(packages
+            .iter()
+            .any(|p| p.name == "rack" && p.version == "3.0.8"));
         assert!(packages.iter().all(|p| p.ecosystem == Ecosystem::RubyGems));
     }
 }
