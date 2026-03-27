@@ -58,7 +58,7 @@ const PATTERN_RULES: &[PatternRule] = &[
     PatternRule {
         rule_id: "DEPSEC-P010",
         description: "Cloud IMDS credential probing",
-        pattern: r"169\.254\.(169\.254|170\.2)",
+        pattern: r"169\.254\.(169\.254|170\.2)\b",
         severity: Severity::Critical,
     },
     PatternRule {
