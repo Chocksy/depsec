@@ -1,0 +1,8 @@
+/target
+.env
+*.pem
+*.key
+*.p12
+credentials.json
+.env.local
+.DS_Store
