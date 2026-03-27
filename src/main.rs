@@ -1,3 +1,4 @@
+mod baseline;
 mod checks;
 mod config;
 mod fixer;
@@ -167,13 +168,47 @@ fn main() -> ExitCode {
         }
 
         Commands::Baseline { action } => match action {
-            BaselineAction::Init { path: _ } => {
-                eprintln!("Baseline init not yet implemented (Phase 7)");
-                ExitCode::from(2)
+            BaselineAction::Init { path } => {
+                let root = match path.canonicalize() {
+                    Ok(p) => p,
+                    Err(e) => {
+                        eprintln!("Error: invalid path '{}': {e}", path.display());
+                        return ExitCode::from(2);
+                    }
+                };
+
+                match baseline::init_baseline(&root) {
+                    Ok(output_path) => {
+                        println!("Baseline created: {output_path}");
+                        println!("Edit allowed_hosts and commit the file.");
+                        ExitCode::SUCCESS
+                    }
+                    Err(e) => {
+                        eprintln!("Error: {e}");
+                        ExitCode::from(2)
+                    }
+                }
             }
-            BaselineAction::Check { capture: _ } => {
-                eprintln!("Baseline check not yet implemented (Phase 7)");
-                ExitCode::from(2)
+            BaselineAction::Check { capture } => {
+                let root = std::env::current_dir().unwrap_or_else(|_| ".".into());
+
+                match baseline::check_baseline(
+                    &root,
+                    capture.as_deref(),
+                ) {
+                    Ok(result) => {
+                        baseline::print_baseline_check(&result, color);
+                        if result.passed() {
+                            ExitCode::SUCCESS
+                        } else {
+                            ExitCode::from(1)
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error: {e}");
+                        ExitCode::from(2)
+                    }
+                }
             }
         },
 

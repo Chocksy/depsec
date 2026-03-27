@@ -1,0 +1,124 @@
+name: 'DepSec — Supply Chain Security Scanner'
+description: 'Scan for vulnerable dependencies, malicious patterns, hardcoded secrets, and unexpected CI network connections'
+branding:
+  icon: 'shield'
+  color: 'green'
+
+inputs:
+  mode:
+    description: 'Scan mode: static (default), full (static + network), report (post-install pattern scan + network)'
+    default: 'static'
+  baseline:
+    description: 'Path to baseline file, or "auto" to generate on first run'
+    default: ''
+  fail-on:
+    description: 'Minimum severity to fail the job: critical, high, medium, low, any'
+    default: 'any'
+  github-token:
+    description: 'GitHub token for branch protection check and SHA resolution'
+    default: '${{ github.token }}'
+  version:
+    description: 'Version of depsec to install (default: latest)'
+    default: 'latest'
+
+outputs:
+  score:
+    description: 'Numerical score (0-100)'
+    value: ${{ steps.scan.outputs.score }}
+  grade:
+    description: 'Letter grade (A-F)'
+    value: ${{ steps.scan.outputs.grade }}
+  findings-count:
+    description: 'Total number of findings'
+    value: ${{ steps.scan.outputs.findings_count }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install depsec
+      shell: bash
+      run: |
+        if [ "${{ inputs.version }}" = "latest" ]; then
+          curl -fsSL https://raw.githubusercontent.com/chocksy/depsec/main/install.sh | sh
+        else
+          curl -fsSL https://raw.githubusercontent.com/chocksy/depsec/main/install.sh | sh -s -- --version "${{ inputs.version }}"
+        fi
+
+    - name: Pre-step scan (static checks)
+      id: pre-scan
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        CHECKS="workflows,secrets,hygiene"
+        if [ "${{ inputs.mode }}" = "static" ]; then
+          CHECKS="workflows,deps,secrets,hygiene"
+        fi
+        depsec scan . --checks "$CHECKS" --json > /tmp/depsec-pre.json || true
+
+    - name: Start network monitor
+      if: inputs.mode == 'full' || inputs.mode == 'report'
+      shell: bash
+      run: |
+        if command -v tcpdump &> /dev/null; then
+          sudo tcpdump -i any -nn -q -l 2>/dev/null | grep -oP '\d+\.\d+\.\d+\.\d+' | sort -u > /tmp/depsec-capture.txt &
+          echo $! > /tmp/depsec-tcpdump.pid
+          echo "Network monitor started"
+        else
+          echo "::warning::tcpdump not available — network monitoring disabled"
+        fi
+
+    # User's steps run between pre and post
+
+    - name: Post-step scan (deps + patterns + network)
+      id: scan
+      if: always()
+      shell: bash
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: |
+        # Stop tcpdump if running
+        if [ -f /tmp/depsec-tcpdump.pid ]; then
+          sudo kill "$(cat /tmp/depsec-tcpdump.pid)" 2>/dev/null || true
+          sleep 1
+        fi
+
+        # Run post-install checks if mode is full or report
+        if [ "${{ inputs.mode }}" = "full" ] || [ "${{ inputs.mode }}" = "report" ]; then
+          depsec scan . --checks deps,patterns --json > /tmp/depsec-post.json || true
+        fi
+
+        # Run full scan and capture results
+        RESULT=$(depsec scan . --json 2>/dev/null || true)
+        SCORE=$(echo "$RESULT" | jq -r '.total_score // 0')
+        GRADE=$(echo "$RESULT" | jq -r '.grade // "F"')
+        FINDINGS=$(echo "$RESULT" | jq '[.results[].findings | length] | add // 0')
+
+        echo "score=$SCORE" >> $GITHUB_OUTPUT
+        echo "grade=$GRADE" >> $GITHUB_OUTPUT
+        echo "findings_count=$FINDINGS" >> $GITHUB_OUTPUT
+
+        # Check baseline if configured
+        if [ -n "${{ inputs.baseline }}" ]; then
+          if [ "${{ inputs.baseline }}" = "auto" ] && [ ! -f depsec.baseline.json ]; then
+            depsec baseline init .
+            echo "::notice::Baseline file created. Commit depsec.baseline.json for future runs."
+          elif [ -f /tmp/depsec-capture.txt ]; then
+            depsec baseline check --capture /tmp/depsec-capture.txt || true
+          fi
+        fi
+
+        # Print human-readable output
+        depsec scan . --no-color || true
+
+        # Determine if we should fail based on fail-on threshold
+        FAIL_ON="${{ inputs.fail-on }}"
+        if [ "$FAIL_ON" = "any" ] && [ "$FINDINGS" -gt 0 ]; then
+          exit 1
+        elif [ "$FAIL_ON" = "critical" ]; then
+          CRITICAL=$(echo "$RESULT" | jq '[.results[].findings[] | select(.severity == "critical")] | length')
+          [ "$CRITICAL" -gt 0 ] && exit 1
+        elif [ "$FAIL_ON" = "high" ]; then
+          HIGH=$(echo "$RESULT" | jq '[.results[].findings[] | select(.severity == "critical" or .severity == "high")] | length')
+          [ "$HIGH" -gt 0 ] && exit 1
+        fi

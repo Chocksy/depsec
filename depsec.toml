@@ -1,0 +1,14 @@
+# DepSec self-scan configuration (dogfooding)
+[ignore]
+# Test fixture files contain fake secrets — ignore them
+secrets = ["src/checks/secrets.rs"]
+
+[checks]
+enabled = ["workflows", "deps", "patterns", "secrets", "hygiene"]
+
+[scoring]
+workflows = 25
+deps = 30
+secrets = 25
+hygiene = 10
+network = 10
