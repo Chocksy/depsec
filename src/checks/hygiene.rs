@@ -191,21 +191,23 @@ fn check_branch_protection(ctx: &ScanContext, findings: &mut Vec<Finding>, pass:
     };
 
     // Check branch protection via API
-    let client = reqwest::blocking::Client::new();
+    let agent = ureq::AgentBuilder::new()
+        .timeout_read(std::time::Duration::from_secs(10))
+        .user_agent("depsec")
+        .build();
     let url = format!("https://api.github.com/repos/{owner}/{repo}/branches/main/protection");
 
-    let resp = client
+    let resp = agent
         .get(&url)
-        .header("User-Agent", "depsec")
-        .header("Authorization", format!("Bearer {token}"))
-        .header("Accept", "application/vnd.github.v3+json")
-        .send();
+        .set("Authorization", &format!("Bearer {token}"))
+        .set("Accept", "application/vnd.github.v3+json")
+        .call();
 
     match resp {
-        Ok(r) if r.status().is_success() => {
+        Ok(_) => {
             pass.push("Branch protection enabled on main".into());
         }
-        Ok(r) if r.status().as_u16() == 404 => {
+        Err(ureq::Error::Status(404, _)) => {
             findings.push(Finding {
                 rule_id: "DEPSEC-H004".into(),
                 severity: Severity::Medium,
@@ -218,7 +220,7 @@ fn check_branch_protection(ctx: &ScanContext, findings: &mut Vec<Finding>, pass:
                 auto_fixable: false,
             });
         }
-        _ => {} // API error — skip silently
+        Err(_) => {} // API error — skip silently
     }
 }
 

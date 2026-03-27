@@ -134,58 +134,57 @@ fn resolve_tag_to_sha(action: &str, tag: &str) -> anyhow::Result<String> {
     let repo = repo.split('/').next().unwrap_or(repo);
 
     let token = std::env::var("GITHUB_TOKEN").ok();
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .context("Failed to create HTTP client")?;
+    let agent = ureq::AgentBuilder::new()
+        .timeout_read(std::time::Duration::from_secs(30))
+        .user_agent("depsec")
+        .build();
 
     // Try as a tag first, then as a branch
     for ref_type in ["tags", "heads"] {
         let url = format!("https://api.github.com/repos/{owner}/{repo}/git/ref/{ref_type}/{tag}");
 
-        let mut req = client
+        let mut req = agent
             .get(&url)
-            .header("User-Agent", "depsec")
-            .header("Accept", "application/vnd.github.v3+json");
+            .set("Accept", "application/vnd.github.v3+json");
 
         if let Some(ref t) = token {
-            req = req.header("Authorization", format!("Bearer {t}"));
+            req = req.set("Authorization", &format!("Bearer {t}"));
         }
 
-        let resp = req.send().context("GitHub API request failed")?;
+        let resp = match req.call() {
+            Ok(r) => r,
+            Err(ureq::Error::Status(_, _)) => continue, // 404 etc — try next ref_type
+            Err(e) => anyhow::bail!("GitHub API request failed: {e}"),
+        };
 
-        if resp.status().is_success() {
-            let body: serde_json::Value = resp.json()?;
+        let body: serde_json::Value = resp.into_json()?;
 
-            // Handle annotated tags (type: "tag") — need to dereference
-            if let Some(obj) = body.get("object") {
-                let obj_type = obj["type"].as_str().unwrap_or("");
-                let sha = obj["sha"].as_str().unwrap_or("");
+        // Handle annotated tags (type: "tag") — need to dereference
+        if let Some(obj) = body.get("object") {
+            let obj_type = obj["type"].as_str().unwrap_or("");
+            let sha = obj["sha"].as_str().unwrap_or("");
 
-                if obj_type == "tag" {
-                    // Dereference annotated tag to get the commit SHA
-                    let tag_url = obj["url"].as_str().unwrap_or("");
-                    if !tag_url.is_empty() && tag_url.starts_with("https://api.github.com/") {
-                        let mut tag_req = client
-                            .get(tag_url)
-                            .header("User-Agent", "depsec")
-                            .header("Accept", "application/vnd.github.v3+json");
-                        if let Some(ref t) = token {
-                            tag_req = tag_req.header("Authorization", format!("Bearer {t}"));
-                        }
-                        let tag_resp = tag_req.send()?;
-                        if tag_resp.status().is_success() {
-                            let tag_body: serde_json::Value = tag_resp.json()?;
-                            if let Some(commit_sha) = tag_body["object"]["sha"].as_str() {
-                                return Ok(commit_sha.to_string());
-                            }
+            if obj_type == "tag" {
+                // Dereference annotated tag to get the commit SHA
+                let tag_url = obj["url"].as_str().unwrap_or("");
+                if !tag_url.is_empty() && tag_url.starts_with("https://api.github.com/") {
+                    let mut tag_req = agent
+                        .get(tag_url)
+                        .set("Accept", "application/vnd.github.v3+json");
+                    if let Some(ref t) = token {
+                        tag_req = tag_req.set("Authorization", &format!("Bearer {t}"));
+                    }
+                    if let Ok(tag_resp) = tag_req.call() {
+                        let tag_body: serde_json::Value = tag_resp.into_json()?;
+                        if let Some(commit_sha) = tag_body["object"]["sha"].as_str() {
+                            return Ok(commit_sha.to_string());
                         }
                     }
                 }
+            }
 
-                if !sha.is_empty() {
-                    return Ok(sha.to_string());
-                }
+            if !sha.is_empty() {
+                return Ok(sha.to_string());
             }
         }
     }

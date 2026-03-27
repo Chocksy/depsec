@@ -121,10 +121,11 @@ fn query_osv_batch(packages: &[Package]) -> anyhow::Result<Vec<Finding>> {
         return Ok(vec![]);
     }
 
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(OSV_TIMEOUT_SECS))
-        .build()
-        .context("Failed to create HTTP client")?;
+    let agent = ureq::AgentBuilder::new()
+        .timeout_read(std::time::Duration::from_secs(OSV_TIMEOUT_SECS))
+        .timeout_write(std::time::Duration::from_secs(OSV_TIMEOUT_SECS))
+        .user_agent("depsec")
+        .build();
 
     let mut all_findings = Vec::new();
 
@@ -143,18 +144,12 @@ fn query_osv_batch(packages: &[Package]) -> anyhow::Result<Vec<Finding>> {
 
         let batch = OsvBatchQuery { queries };
 
-        let resp = client
+        let resp = agent
             .post(OSV_BATCH_URL)
-            .json(&batch)
-            .send()
+            .send_json(serde_json::to_value(&batch)?)
             .context("OSV API request failed")?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            anyhow::bail!("OSV API returned {status}");
-        }
-
-        let body: serde_json::Value = resp.json().context("Failed to parse OSV response")?;
+        let body: serde_json::Value = resp.into_json().context("Failed to parse OSV response")?;
 
         if let Some(results) = body.get("results").and_then(|r| r.as_array()) {
             for (i, result) in results.iter().enumerate() {

@@ -106,49 +106,67 @@ pub fn parse_yarn(path: &Path) -> anyhow::Result<Vec<Package>> {
 
 /// Parse pnpm-lock.yaml.
 /// Packages are under `packages` key with paths like "/pkg@version".
+/// Uses line-based parsing to avoid YAML library dependency.
 pub fn parse_pnpm(path: &Path) -> anyhow::Result<Vec<Package>> {
     let content = std::fs::read_to_string(path).context("Failed to read pnpm-lock.yaml")?;
-    let parsed: serde_yaml::Value =
-        serde_yaml::from_str(&content).context("Failed to parse pnpm-lock.yaml")?;
-
     let mut packages = Vec::new();
+    let mut in_packages = false;
 
-    if let Some(pkgs) = parsed.get("packages").and_then(|p| p.as_mapping()) {
-        for (key, _value) in pkgs {
-            let key_str = match key.as_str() {
-                Some(s) => s,
-                None => continue,
-            };
+    for line in content.lines() {
+        // Detect the top-level `packages:` section
+        if line == "packages:" {
+            in_packages = true;
+            continue;
+        }
 
-            // pnpm v6+: "/@scope/name@version" or "/name@version"
-            // pnpm v9: "name@version" (no leading /)
-            let entry = key_str.trim_start_matches('/');
+        // End of packages section (next top-level key)
+        if in_packages && !line.starts_with(' ') && !line.starts_with('\t') && !line.is_empty() {
+            break;
+        }
 
-            // Handle scoped packages (@scope/name)
-            let (name, version) = if let Some(rest) = entry.strip_prefix('@') {
-                // @scope/name@version
-                if let Some(at_pos) = rest.rfind('@') {
-                    let at_pos = at_pos + 1; // Adjust for the stripped @
-                    (&entry[..at_pos], &entry[at_pos + 1..])
-                } else {
-                    continue;
-                }
+        if !in_packages {
+            continue;
+        }
+
+        // Package entries are indented and end with ':'
+        // e.g., "  /lodash@4.17.21:" or "  /@types/node@18.0.0:" or "  lodash@4.17.21:"
+        let trimmed = line.trim();
+        if !trimmed.ends_with(':') || trimmed.starts_with('#') {
+            continue;
+        }
+        // Skip sub-keys (deeper indentation like "    resolution:")
+        let indent = line.len() - line.trim_start().len();
+        if indent > 4 {
+            continue;
+        }
+
+        let key = trimmed
+            .trim_end_matches(':')
+            .trim_matches('\'')
+            .trim_matches('"');
+        let entry = key.trim_start_matches('/');
+
+        // Parse name@version
+        let (name, version) = if let Some(rest) = entry.strip_prefix('@') {
+            // @scope/name@version
+            if let Some(at_pos) = rest.rfind('@') {
+                let at_pos = at_pos + 1;
+                (&entry[..at_pos], &entry[at_pos + 1..])
             } else {
-                // name@version
-                if let Some(at_pos) = entry.rfind('@') {
-                    (&entry[..at_pos], &entry[at_pos + 1..])
-                } else {
-                    continue;
-                }
-            };
-
-            if !name.is_empty() && !version.is_empty() {
-                packages.push(Package {
-                    name: name.to_string(),
-                    version: version.to_string(),
-                    ecosystem: Ecosystem::Npm,
-                });
+                continue;
             }
+        } else if let Some(at_pos) = entry.rfind('@') {
+            (&entry[..at_pos], &entry[at_pos + 1..])
+        } else {
+            continue;
+        };
+
+        if !name.is_empty() && !version.is_empty() {
+            packages.push(Package {
+                name: name.to_string(),
+                version: version.to_string(),
+                ecosystem: Ecosystem::Npm,
+            });
         }
     }
 

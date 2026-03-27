@@ -143,43 +143,44 @@ fn check_action_pinning(content: &str, file: &str, findings: &mut Vec<Finding>) 
 
 /// DEPSEC-W002: permissions block missing or write-all
 fn check_permissions(content: &str, file: &str, findings: &mut Vec<Finding>) {
-    let parsed: serde_yaml::Value = match serde_yaml::from_str(content) {
-        Ok(v) => v,
-        Err(_) => return, // Skip unparseable YAML
-    };
+    // Look for a top-level `permissions:` line (not indented = top-level in YAML)
+    let mut has_permissions = false;
+    let mut is_write_all = false;
 
-    let mapping = match parsed.as_mapping() {
-        Some(m) => m,
-        None => return,
-    };
+    for line in content.lines() {
+        // Top-level key: starts at column 0, not a comment
+        if line.starts_with("permissions:") {
+            has_permissions = true;
+            let value = line.trim_start_matches("permissions:").trim();
+            if value == "write-all" {
+                is_write_all = true;
+            }
+            break;
+        }
+    }
 
-    // Check top-level permissions
-    match mapping.get(serde_yaml::Value::String("permissions".into())) {
-        None => {
-            findings.push(Finding {
-                rule_id: "DEPSEC-W002".into(),
-                severity: Severity::Medium,
-                message: "No top-level permissions block — defaults to write-all".into(),
-                file: Some(file.into()),
-                line: None,
-                suggestion: Some(
-                    "Add 'permissions: {}' for read-only, or specify minimal permissions".into(),
-                ),
-                auto_fixable: false,
-            });
-        }
-        Some(serde_yaml::Value::String(s)) if s == "write-all" => {
-            findings.push(Finding {
-                rule_id: "DEPSEC-W002".into(),
-                severity: Severity::Medium,
-                message: "Workflow permissions set to write-all".into(),
-                file: Some(file.into()),
-                line: None,
-                suggestion: Some("Set minimal permissions per job instead of write-all".into()),
-                auto_fixable: false,
-            });
-        }
-        _ => {} // Has permissions block with specific values — OK
+    if !has_permissions {
+        findings.push(Finding {
+            rule_id: "DEPSEC-W002".into(),
+            severity: Severity::Medium,
+            message: "No top-level permissions block — defaults to write-all".into(),
+            file: Some(file.into()),
+            line: None,
+            suggestion: Some(
+                "Add 'permissions: {}' for read-only, or specify minimal permissions".into(),
+            ),
+            auto_fixable: false,
+        });
+    } else if is_write_all {
+        findings.push(Finding {
+            rule_id: "DEPSEC-W002".into(),
+            severity: Severity::Medium,
+            message: "Workflow permissions set to write-all".into(),
+            file: Some(file.into()),
+            line: None,
+            suggestion: Some("Set minimal permissions per job instead of write-all".into()),
+            auto_fixable: false,
+        });
     }
 }
 
