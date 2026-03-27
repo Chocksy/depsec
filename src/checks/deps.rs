@@ -159,24 +159,44 @@ fn query_osv_batch(packages: &[Package]) -> anyhow::Result<Vec<Finding>> {
                     for vuln in vulns {
                         let id = vuln["id"].as_str().unwrap_or("UNKNOWN");
                         let summary = vuln["summary"].as_str().unwrap_or("No summary available");
+                        let is_malware = id.starts_with("MAL-");
 
-                        let severity = determine_severity(vuln);
+                        let severity = if is_malware {
+                            Severity::Critical
+                        } else {
+                            determine_severity(vuln)
+                        };
 
-                        let fix_version = extract_fix_version(vuln, &pkg.ecosystem);
+                        let rule_id = if is_malware {
+                            format!("DEPSEC-MAL:{id}")
+                        } else {
+                            format!("DEPSEC-V:{id}")
+                        };
 
-                        let suggestion = if let Some(fix) = &fix_version {
+                        let message = if is_malware {
+                            format!(
+                                "KNOWN MALICIOUS PACKAGE: {} {} — {summary}",
+                                pkg.name, pkg.version
+                            )
+                        } else {
+                            format!("{}: {} {} — {summary}", severity, pkg.name, pkg.version)
+                        };
+
+                        let suggestion = if is_malware {
+                            format!(
+                                "REMOVE {} IMMEDIATELY — this package is confirmed malware",
+                                pkg.name
+                            )
+                        } else if let Some(fix) = extract_fix_version(vuln, &pkg.ecosystem) {
                             format!("Upgrade {} to >= {fix}", pkg.name)
                         } else {
                             format!("Review advisory {id} for remediation steps")
                         };
 
                         all_findings.push(Finding {
-                            rule_id: format!("DEPSEC-V:{id}"),
+                            rule_id,
                             severity,
-                            message: format!(
-                                "{}: {} {} — {summary}",
-                                severity, pkg.name, pkg.version
-                            ),
+                            message,
                             file: None,
                             line: None,
                             suggestion: Some(suggestion),

@@ -55,6 +55,18 @@ const PATTERN_RULES: &[PatternRule] = &[
         pattern: r"new\s+Function\s*\(\s*[a-zA-Z_]",
         severity: Severity::High,
     },
+    PatternRule {
+        rule_id: "DEPSEC-P010",
+        description: "Cloud IMDS credential probing",
+        pattern: r"169\.254\.(169\.254|170\.2)",
+        severity: Severity::Critical,
+    },
+    PatternRule {
+        rule_id: "DEPSEC-P011",
+        description: "Environment variable serialization/exfiltration",
+        pattern: r"(?i)(JSON\.stringify\s*\(\s*process\.env|os\.environ\b|process\.env\b.*JSON|toJSON\(secrets\))",
+        severity: Severity::High,
+    },
 ];
 
 const BINARY_EXTENSIONS: &[&str] = &[
@@ -177,6 +189,16 @@ impl Check for PatternsCheck {
             }
         }
 
+        // DEPSEC-P009: Python .pth file persistence
+        if !ignored_rules.contains(&"DEPSEC-P009") {
+            check_pth_files(ctx.root, &mut findings);
+        }
+
+        // DEPSEC-P012: package.json install scripts with remote fetch
+        if !ignored_rules.contains(&"DEPSEC-P012") {
+            check_install_scripts(ctx.root, &mut findings);
+        }
+
         if scanned_files > 0 {
             if findings.is_empty() {
                 pass_messages.push(format!(
@@ -264,6 +286,136 @@ fn shannon_entropy(s: &str) -> f64 {
             -p * p.log2()
         })
         .sum()
+}
+
+/// DEPSEC-P009: Scan Python site-packages for .pth files with executable code
+fn check_pth_files(root: &Path, findings: &mut Vec<Finding>) {
+    let pth_dangerous = [
+        "subprocess",
+        "exec(",
+        "eval(",
+        "base64",
+        "import os",
+        "import sys",
+    ];
+    let search_dirs = [".venv", "venv", "site-packages"];
+
+    for dir_name in &search_dirs {
+        let dir = root.join(dir_name);
+        if !dir.exists() {
+            continue;
+        }
+
+        for entry in WalkDir::new(&dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file())
+        {
+            let path = entry.path();
+            let ext = path.extension().and_then(|e| e.to_str());
+            if ext != Some("pth") {
+                continue;
+            }
+
+            let content = match std::fs::read_to_string(path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            for keyword in &pth_dangerous {
+                if content.contains(keyword) {
+                    let rel_path = path
+                        .strip_prefix(root)
+                        .unwrap_or(path)
+                        .to_string_lossy()
+                        .to_string();
+                    findings.push(Finding {
+                        rule_id: "DEPSEC-P009".into(),
+                        severity: Severity::Critical,
+                        message: format!(
+                            ".pth file with executable code: contains '{keyword}'"
+                        ),
+                        file: Some(rel_path),
+                        line: None,
+                        suggestion: Some(
+                            "Python .pth files execute on every interpreter startup — review or remove immediately".into(),
+                        ),
+                        auto_fixable: false,
+                    });
+                    break; // One finding per file is enough
+                }
+            }
+        }
+    }
+}
+
+/// DEPSEC-P012: Check package.json install scripts for remote code execution
+fn check_install_scripts(root: &Path, findings: &mut Vec<Finding>) {
+    let package_json = root.join("package.json");
+    if !package_json.exists() {
+        return;
+    }
+
+    let content = match std::fs::read_to_string(&package_json) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    let parsed: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+
+    let scripts = match parsed.get("scripts").and_then(|s| s.as_object()) {
+        Some(s) => s,
+        None => return,
+    };
+
+    let dangerous_hooks = ["preinstall", "postinstall", "install", "prepare"];
+    let safe_scripts = [
+        "husky install",
+        "husky",
+        "patch-package",
+        "node-gyp rebuild",
+        "node-gyp",
+        "tsc",
+        "esbuild",
+        "ngcc",
+    ];
+    let suspicious_patterns = Regex::new(
+        r"(?i)(curl|wget|fetch\s*\(|https?\.get|node\s+\S+\.js|python|bash|sh\s+-c|powershell|eval|exec\s*\()",
+    )
+    .unwrap();
+
+    for hook in &dangerous_hooks {
+        if let Some(script_value) = scripts.get(*hook).and_then(|s| s.as_str()) {
+            // Skip known-safe scripts
+            if safe_scripts
+                .iter()
+                .any(|safe| script_value.starts_with(safe))
+            {
+                continue;
+            }
+
+            if suspicious_patterns.is_match(script_value) {
+                findings.push(Finding {
+                    rule_id: "DEPSEC-P012".into(),
+                    severity: Severity::High,
+                    message: format!(
+                        "Install script '{}' executes suspicious command: {}",
+                        hook,
+                        truncate_line(script_value, 60)
+                    ),
+                    file: Some("package.json".into()),
+                    line: None,
+                    suggestion: Some(format!(
+                        "Review the '{hook}' script — install scripts are a common attack vector"
+                    )),
+                    auto_fixable: false,
+                });
+            }
+        }
+    }
 }
 
 fn truncate_line(line: &str, max: usize) -> String {

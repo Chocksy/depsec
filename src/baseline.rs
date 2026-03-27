@@ -117,11 +117,20 @@ pub fn check_baseline(
         None => vec![],
     };
 
+    // IPs that should NEVER appear during builds — always flag regardless of baseline
+    let always_block = [
+        "169.254.169.254", // AWS/GCP IMDS
+        "169.254.170.2",   // ECS credential endpoint
+    ];
+
     let mut matched = Vec::new();
     let mut violations = Vec::new();
+    let mut critical_violations = Vec::new();
 
     for host in &captured_hosts {
-        if baseline.allowed_hosts.contains(host) {
+        if always_block.iter().any(|b| host.contains(b)) {
+            critical_violations.push(host.clone());
+        } else if baseline.allowed_hosts.contains(host) {
             matched.push(host.clone());
         } else {
             violations.push(host.clone());
@@ -131,6 +140,7 @@ pub fn check_baseline(
     Ok(BaselineCheckResult {
         matched,
         violations,
+        critical_violations,
         total_captured: captured_hosts.len(),
     })
 }
@@ -139,12 +149,13 @@ pub fn check_baseline(
 pub struct BaselineCheckResult {
     pub matched: Vec<String>,
     pub violations: Vec<String>,
+    pub critical_violations: Vec<String>,
     pub total_captured: usize,
 }
 
 impl BaselineCheckResult {
     pub fn passed(&self) -> bool {
-        self.violations.is_empty()
+        self.violations.is_empty() && self.critical_violations.is_empty()
     }
 }
 
@@ -175,6 +186,15 @@ pub fn print_baseline_check(result: &BaselineCheckResult, use_color: bool) {
             "✓"
         };
         println!("  {icon} {host} — in baseline");
+    }
+
+    for host in &result.critical_violations {
+        let icon = if use_color {
+            "\x1b[31m✗\x1b[0m"
+        } else {
+            "✗"
+        };
+        println!("  {icon} {host} — CRITICAL: cloud credential endpoint (IMDS)!");
     }
 
     for host in &result.violations {
@@ -251,5 +271,34 @@ mod tests {
         assert!(!result.passed());
         assert_eq!(result.violations.len(), 1);
         assert!(result.violations.contains(&"83.142.209.203".to_string()));
+    }
+
+    #[test]
+    fn test_imds_always_flagged() {
+        let dir = TempDir::new().unwrap();
+        init_baseline(dir.path()).unwrap();
+
+        let capture = dir.path().join("capture.txt");
+        fs::write(&capture, "github.com\n169.254.169.254\n").unwrap();
+
+        let result = check_baseline(dir.path(), Some(&capture)).unwrap();
+        assert!(!result.passed());
+        assert_eq!(result.critical_violations.len(), 1);
+        assert!(result
+            .critical_violations
+            .contains(&"169.254.169.254".to_string()));
+    }
+
+    #[test]
+    fn test_ecs_endpoint_always_flagged() {
+        let dir = TempDir::new().unwrap();
+        init_baseline(dir.path()).unwrap();
+
+        let capture = dir.path().join("capture.txt");
+        fs::write(&capture, "169.254.170.2\n").unwrap();
+
+        let result = check_baseline(dir.path(), Some(&capture)).unwrap();
+        assert!(!result.passed());
+        assert_eq!(result.critical_violations.len(), 1);
     }
 }
