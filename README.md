@@ -6,6 +6,9 @@ Detects vulnerable dependencies, malicious code patterns, hardcoded secrets, wor
 
 [![CI](https://github.com/chocksy/depsec/actions/workflows/ci.yml/badge.svg)](https://github.com/chocksy/depsec/actions/workflows/ci.yml)
 [![DepSec Score](https://img.shields.io/badge/depsec-A-brightgreen)](https://github.com/chocksy/depsec)
+[![crates.io](https://img.shields.io/crates/v/depsec)](https://crates.io/crates/depsec)
+
+<img src="depsec-scorecard.svg" width="480">
 
 ## Install
 

@@ -9,6 +9,7 @@ mod preflight;
 mod rules;
 mod sarif;
 mod scanner;
+mod scorecard;
 mod scoring;
 mod selfcheck;
 mod shellhook;
@@ -116,6 +117,17 @@ enum Commands {
 
     /// Generate shell aliases for invisible protection
     ShellHook,
+
+    /// Generate SVG scorecard image
+    Scorecard {
+        /// Path to the project root
+        #[arg(default_value = ".")]
+        path: PathBuf,
+
+        /// Output file (default: depsec-scorecard.svg)
+        #[arg(short, long, default_value = "depsec-scorecard.svg")]
+        output: PathBuf,
+    },
 
     /// Output badge markdown
     Badge {
@@ -391,6 +403,41 @@ fn main() -> ExitCode {
         Commands::ShellHook => {
             print!("{}", shellhook::generate_shell_hook());
             ExitCode::SUCCESS
+        }
+
+        Commands::Scorecard { path, output } => {
+            let root = match path.canonicalize() {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("Error: invalid path '{}': {e}", path.display());
+                    return ExitCode::from(2);
+                }
+            };
+
+            let config = config::load_config(&root);
+            match scanner::run_scan(&root, &config, None) {
+                Ok(report) => {
+                    let svg = scorecard::generate_svg(&report);
+                    match std::fs::write(&output, &svg) {
+                        Ok(()) => {
+                            println!("Scorecard saved to {}", output.display());
+                            println!(
+                                "Add to README: <img src=\"{}\" width=\"480\">",
+                                output.display()
+                            );
+                            ExitCode::SUCCESS
+                        }
+                        Err(e) => {
+                            eprintln!("Error writing scorecard: {e}");
+                            ExitCode::from(2)
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    ExitCode::from(2)
+                }
+            }
         }
 
         Commands::Badge { path } => {

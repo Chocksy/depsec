@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="330" viewBox="0 0 480 330">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+  </defs>
+  <rect width="480" height="330" rx="16" fill="url(#bg)"/>
+  <rect width="480" height="330" rx="16" fill="none" stroke="#334155" stroke-width="1"/>
+  <text x="20" y="35" font-size="14" fill="#94a3b8" font-family="system-ui, -apple-system, sans-serif" font-weight="400">DEPSEC SCORECARD</text>
+  <text x="20" y="80" font-size="48" fill="#22c55e" font-family="system-ui, -apple-system, sans-serif" font-weight="700">10.0</text>
+  <text x="115" y="65" font-size="16" fill="#64748b" font-family="system-ui, -apple-system, sans-serif">/10</text>
+  <text x="115" y="82" font-size="14" fill="#22c55e" font-family="system-ui, -apple-system, sans-serif" font-weight="600">Grade A</text>
+  <text x="260" y="55" font-size="13" fill="#94a3b8" font-family="system-ui, -apple-system, sans-serif">depsec</text>
+  <text x="260" y="75" font-size="11" fill="#64748b" font-family="system-ui, -apple-system, sans-serif">v0.2.0 &#183; Supply Chain Security</text>
+  <line x1="20" y1="100" x2="460" y2="100" stroke="#334155" stroke-width="1"/>
+
+    <text x="20" y="136" font-size="13" fill="#e2e8f0" font-weight="500">Workflows</text>
+    <rect x="160" y="126" width="180" height="12" rx="6" fill="#1e293b"/>
+    <rect x="160" y="126" width="180" height="12" rx="6" fill="#22c55e"/>
+    <text x="350" y="136" font-size="12" fill="#cbd5e1" font-weight="600">100%</text>
+    <text x="440" y="136" font-size="11" fill="#4ade80" text-anchor="end">&#x2713; clean</text>
+    <text x="20" y="168" font-size="13" fill="#e2e8f0" font-weight="500">Deps</text>
+    <rect x="160" y="158" width="180" height="12" rx="6" fill="#1e293b"/>
+    <rect x="160" y="158" width="180" height="12" rx="6" fill="#22c55e"/>
+    <text x="350" y="168" font-size="12" fill="#cbd5e1" font-weight="600">100%</text>
+    <text x="440" y="168" font-size="11" fill="#4ade80" text-anchor="end">&#x2713; clean</text>
+    <text x="20" y="200" font-size="13" fill="#e2e8f0" font-weight="500">Patterns</text>
+    <rect x="160" y="190" width="180" height="12" rx="6" fill="#1e293b"/>
+    <rect x="160" y="190" width="180" height="12" rx="6" fill="#22c55e"/>
+    <text x="350" y="200" font-size="12" fill="#cbd5e1" font-weight="600">100%</text>
+    <text x="440" y="200" font-size="11" fill="#4ade80" text-anchor="end">&#x2713; clean</text>
+    <text x="20" y="232" font-size="13" fill="#e2e8f0" font-weight="500">Secrets</text>
+    <rect x="160" y="222" width="180" height="12" rx="6" fill="#1e293b"/>
+    <rect x="160" y="222" width="180" height="12" rx="6" fill="#22c55e"/>
+    <text x="350" y="232" font-size="12" fill="#cbd5e1" font-weight="600">100%</text>
+    <text x="440" y="232" font-size="11" fill="#4ade80" text-anchor="end">&#x2713; clean</text>
+    <text x="20" y="264" font-size="13" fill="#e2e8f0" font-weight="500">Hygiene</text>
+    <rect x="160" y="254" width="180" height="12" rx="6" fill="#1e293b"/>
+    <rect x="160" y="254" width="180" height="12" rx="6" fill="#22c55e"/>
+    <text x="350" y="264" font-size="12" fill="#cbd5e1" font-weight="600">100%</text>
+    <text x="440" y="264" font-size="11" fill="#4ade80" text-anchor="end">&#x2713; clean</text>
+  <line x1="20" y1="295" x2="460" y2="295" stroke="#334155" stroke-width="1"/>
+  <text x="20" y="312" font-size="10" fill="#475569" font-family="system-ui, -apple-system, sans-serif">github.com/chocksy/depsec</text>
+  <text x="460" y="312" font-size="10" fill="#475569" font-family="system-ui, -apple-system, sans-serif" text-anchor="end">Own your security</text>
+</svg>
