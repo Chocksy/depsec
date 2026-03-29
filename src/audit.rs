@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 
 use crate::ast::AstAnalyzer;
 use crate::config::TriageConfig;
-use crate::llm::{ChatMessage, LlmClient, TokenUsage};
+use crate::llm::{ChatMessage, LlmClient};
 
 /// Package profile gathered during reconnaissance
 #[derive(Debug)]
@@ -79,12 +79,8 @@ pub struct AuditResult {
 
 /// Locate and profile a package
 pub fn locate_package(name: &str, root: &Path) -> Result<PackageProfile> {
-    // Try node_modules
-    let npm_path = if name.starts_with('@') {
-        root.join("node_modules").join(name)
-    } else {
-        root.join("node_modules").join(name)
-    };
+    // Try node_modules (scoped packages like @scope/pkg are handled by join)
+    let npm_path = root.join("node_modules").join(name);
 
     if npm_path.exists() {
         return profile_npm_package(name, &npm_path);
@@ -367,7 +363,7 @@ struct LlmFinding {
 pub fn run_audit(
     profile: &PackageProfile,
     client: &LlmClient,
-    config: &TriageConfig,
+    _config: &TriageConfig,
     dry_run: bool,
 ) -> Result<AuditResult> {
     if dry_run {

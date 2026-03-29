@@ -2,7 +2,9 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
+#[allow(dead_code)]
 const DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4-6";
+#[allow(dead_code)]
 const DEFAULT_TIMEOUT_SECS: u64 = 60;
 
 #[derive(Debug, Clone, Serialize)]
@@ -44,6 +46,7 @@ struct UsageRaw {
 
 pub struct ChatResponse {
     pub content: String,
+    #[allow(dead_code)]
     pub model: String,
     pub usage: TokenUsage,
 }
@@ -64,6 +67,7 @@ pub struct LlmClient {
 
 impl LlmClient {
     /// Create client from OPENROUTER_API_KEY environment variable
+    #[allow(dead_code)]
     pub fn from_env() -> Option<Self> {
         let api_key = std::env::var("OPENROUTER_API_KEY").ok()?;
         if api_key.is_empty() {
