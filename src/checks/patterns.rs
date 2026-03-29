@@ -3,13 +3,15 @@ use std::path::Path;
 use regex::Regex;
 use walkdir::WalkDir;
 
-use crate::checks::{Check, CheckResult, Finding, ScanContext, Severity};
+use crate::ast::AstAnalyzer;
+use crate::checks::{Check, CheckResult, Confidence, Finding, ScanContext, Severity};
 
 struct PatternRule {
     rule_id: &'static str,
     description: &'static str,
     pattern: &'static str,
     severity: Severity,
+    confidence: Confidence,
 }
 
 const PATTERN_RULES: &[PatternRule] = &[
@@ -18,54 +20,63 @@ const PATTERN_RULES: &[PatternRule] = &[
         description: "eval()/exec() with decoded or variable input",
         pattern: r"(?i)\b(eval|exec)\s*\(\s*[a-zA-Z_]",
         severity: Severity::High,
+        confidence: Confidence::Low, // High FP rate — regex can't distinguish regex.exec() from child_process.exec()
     },
     PatternRule {
         rule_id: "DEPSEC-P002",
         description: "base64 decode → execute chain",
         pattern: r#"(?i)(atob|base64[._\-]?decode|Buffer\.from\([^)]+,\s*['"]base64['"]).*\b(eval|exec|Function|spawn|child_process|require)\b"#,
         severity: Severity::Critical,
+        confidence: Confidence::Medium,
     },
     PatternRule {
         rule_id: "DEPSEC-P003",
         description: "HTTP calls to raw IP addresses",
         pattern: r#"(?i)(https?://|fetch\s*\(\s*['"]https?://|request\s*\(\s*['"]https?://|axios\.\w+\s*\(\s*['"]https?://)\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}"#,
         severity: Severity::High,
+        confidence: Confidence::Medium,
     },
     PatternRule {
         rule_id: "DEPSEC-P004",
         description: "File reads targeting sensitive directories",
         pattern: r#"(?i)(readFile|read_file|open)\s*\(\s*['"]?(~/?\.(ssh|aws|env|gnupg)|/home/[^/]+/\.(ssh|aws|env|gnupg)|/root/\.(ssh|aws|env|gnupg))"#,
         severity: Severity::Critical,
+        confidence: Confidence::High,
     },
     PatternRule {
         rule_id: "DEPSEC-P005",
         description: "Binary file read → byte extraction → execution",
         pattern: r"(?i)(readFileSync|read_file|open)\s*\(.*\.(wav|mp3|png|jpg|ico|bmp)\b",
         severity: Severity::Critical,
+        confidence: Confidence::Medium,
     },
     PatternRule {
         rule_id: "DEPSEC-P006",
         description: "postinstall/preinstall scripts with network calls",
         pattern: r"(?i)(curl|wget|fetch|https?\.get|request\(|axios\.\w+)\s*\(",
         severity: Severity::High,
+        confidence: Confidence::High,
     },
     PatternRule {
         rule_id: "DEPSEC-P008",
         description: "new Function() with dynamic input",
         pattern: r"new\s+Function\s*\(\s*[a-zA-Z_]",
         severity: Severity::High,
+        confidence: Confidence::Medium,
     },
     PatternRule {
         rule_id: "DEPSEC-P010",
         description: "Cloud IMDS credential probing",
         pattern: r"169\.254\.(169\.254|170\.2)\b",
         severity: Severity::Critical,
+        confidence: Confidence::High,
     },
     PatternRule {
         rule_id: "DEPSEC-P011",
         description: "Environment variable serialization/exfiltration",
         pattern: r"(?i)(JSON\.stringify\s*\(\s*process\.env|os\.environ\b|process\.env\b.*JSON|toJSON\(secrets\))",
         severity: Severity::High,
+        confidence: Confidence::Medium,
     },
 ];
 
@@ -75,11 +86,35 @@ const BINARY_EXTENSIONS: &[&str] = &[
     ".pdf", ".doc", ".docx",
 ];
 
+/// Extensions that produce false positives — metadata/declarations, not executable code
+const SKIP_EXTENSIONS: &[&str] = &[
+    ".map",   // source maps — stringified source, never executed
+    ".d.ts",  // TypeScript declarations — type definitions only
+    ".d.mts", // module declaration files
+    ".d.cts", // CommonJS declaration files
+];
+
+/// Directory names inside dep dirs that should be skipped entirely.
+/// NOTE: test/tests/spec are NOT skipped — malicious packages can hide payloads there.
+const SKIP_DIR_NAMES: &[&str] = &[
+    ".vite", // Vite prebundled cache — duplicates of node_modules packages
+];
+
+/// Non-code files inside dep dirs that should be skipped
+const SKIP_FILENAMES: &[&str] = &[
+    "README.md",
+    "readme.md",
+    "CHANGELOG.md",
+    "changelog.md",
+    "HISTORY.md",
+    "LICENSE",
+    "LICENSE.md",
+    "license",
+];
+
 const DEP_DIRS: &[&str] = &[
     "node_modules",
-    "vendor/bundle",
-    "vendor/gems",
-    "vendor",
+    "vendor", // covers vendor/bundle, vendor/gems, and Go/PHP vendor dirs
     ".venv",
     "venv",
 ];
@@ -113,6 +148,7 @@ impl Check for PatternsCheck {
         let mut findings = Vec::new();
         let mut scanned_files = 0;
         let mut pass_messages = Vec::new();
+        let mut ast_analyzer = AstAnalyzer::new();
 
         // Scan dependency directories
         for dep_dir_name in DEP_DIRS {
@@ -121,8 +157,13 @@ impl Check for PatternsCheck {
                 continue;
             }
 
+            let extra_skip_dirs = &ctx.config.patterns.skip_dirs;
             for entry in WalkDir::new(&dep_dir)
                 .into_iter()
+                .filter_entry(|e| {
+                    let name = e.file_name().to_str().unwrap_or("");
+                    !should_skip_dir(name) && !extra_skip_dirs.iter().any(|d| d == name)
+                })
                 .filter_map(|e| e.ok())
                 .filter(|e| e.file_type().is_file())
             {
@@ -130,6 +171,16 @@ impl Check for PatternsCheck {
 
                 // Skip binary files by extension
                 if is_binary_ext(path) {
+                    continue;
+                }
+
+                // Skip metadata/declaration files that produce false positives
+                if is_skip_ext(path) {
+                    continue;
+                }
+
+                // Skip non-code files (READMEs, CHANGELOGs, LICENSEs)
+                if is_skip_filename(path) {
                     continue;
                 }
 
@@ -159,9 +210,45 @@ impl Check for PatternsCheck {
                     .to_string_lossy()
                     .to_string();
 
-                // Check regex patterns
+                // AST analysis for JS/TS files — handles P001 and P008 with High confidence
+                // Only parse with tree-sitter if the file mentions dangerous modules or patterns.
+                // Broader than regex P001 — also catches spawn, execFile, child_process imports.
+                let needs_ast = AstAnalyzer::can_analyze(path)
+                    && (content.contains("child_process")
+                        || content.contains("shelljs")
+                        || content.contains("execa")
+                        || content.contains("cross-spawn")
+                        || content.contains("new Function"));
+
+                let ast_handled = if needs_ast {
+                    let ast_findings = ast_analyzer.analyze(path, &content);
+                    let pkg = extract_package_name(&rel_path);
+                    for af in &ast_findings {
+                        findings.push(Finding {
+                            rule_id: af.rule_id.clone(),
+                            severity: af.severity,
+                            confidence: Some(af.confidence),
+                            message: af.message.clone(),
+                            file: Some(rel_path.clone()),
+                            line: Some(af.line),
+                            suggestion: Some("Review or remove this dependency".into()),
+                            package: pkg.clone(),
+                            auto_fixable: false,
+                        });
+                    }
+                    true
+                } else {
+                    false
+                };
+
+                // Regex patterns — skip AST-handled rules for JS/TS files
                 for (line_num, line) in content.lines().enumerate() {
                     for (rule, re) in &compiled {
+                        // If AST analyzed this file, skip P001 and P008 (AST handles them)
+                        if ast_handled && is_ast_rule(rule.rule_id) {
+                            continue;
+                        }
+
                         if re.is_match(line) {
                             // Special handling for P006: only flag in package.json scripts
                             if rule.rule_id == "DEPSEC-P006" && !is_install_script(path, line) {
@@ -172,10 +259,12 @@ impl Check for PatternsCheck {
                             findings.push(Finding {
                                 rule_id: rule.rule_id.into(),
                                 severity: rule.severity,
+                                confidence: Some(rule.confidence),
                                 message: format!("{}: {snippet}", rule.description),
                                 file: Some(rel_path.clone()),
                                 line: Some(line_num + 1),
                                 suggestion: Some("Review or remove this dependency".into()),
+                                package: extract_package_name(&rel_path),
                                 auto_fixable: false,
                             });
                         }
@@ -197,6 +286,27 @@ impl Check for PatternsCheck {
         // DEPSEC-P012: package.json install scripts with remote fetch
         if !ignored_rules.contains(&"DEPSEC-P012") {
             check_install_scripts(ctx.root, &mut findings);
+        }
+
+        // Apply per-package allow rules from config
+        let allow_rules = &ctx.config.patterns.allow;
+        if !allow_rules.is_empty() {
+            let before_count = findings.len();
+            findings.retain(|f| {
+                if let Some(pkg) = &f.package {
+                    if let Some(allowed_rules) = allow_rules.get(pkg) {
+                        return !allowed_rules.iter().any(|r| r == &f.rule_id);
+                    }
+                }
+                true // Keep findings without package or without allow rules
+            });
+            let suppressed = before_count - findings.len();
+            if suppressed > 0 {
+                pass_messages.push(format!(
+                    "{suppressed} finding{} suppressed by per-package allow rules",
+                    if suppressed == 1 { "" } else { "s" }
+                ));
+            }
         }
 
         if scanned_files > 0 {
@@ -224,6 +334,56 @@ impl Check for PatternsCheck {
     }
 }
 
+/// Extract package name from a dependency file path.
+/// "node_modules/@scope/pkg/lib/file.js" → "@scope/pkg"
+/// "node_modules/lodash/index.js" → "lodash"
+/// "vendor/bundle/ruby/3.2.0/gems/rails-7.1.0/..." → "rails-7.1.0"
+/// ".venv/lib/python3.11/site-packages/requests/..." → "requests"
+fn extract_package_name(rel_path: &str) -> Option<String> {
+    // Use rfind to handle nested node_modules (e.g., node_modules/a/node_modules/b/...)
+    if let Some(pos) = rel_path.rfind("node_modules/") {
+        let rest = &rel_path[pos + "node_modules/".len()..];
+        let parts: Vec<&str> = rest.splitn(3, '/').collect();
+        if parts.is_empty() {
+            return None;
+        }
+        // Scoped package: @scope/name
+        if parts[0].starts_with('@') && parts.len() >= 2 {
+            return Some(format!("{}/{}", parts[0], parts[1]));
+        }
+        return Some(parts[0].to_string());
+    }
+
+    // vendor/bundle/ruby/X.Y.Z/gems/NAME-VERSION/...
+    if let Some(rest) = rel_path.strip_prefix("vendor/") {
+        if let Some(gems_pos) = rest.find("gems/") {
+            let after_gems = &rest[gems_pos + 5..];
+            if let Some(slash) = after_gems.find('/') {
+                return Some(after_gems[..slash].to_string());
+            }
+            return Some(after_gems.to_string());
+        }
+    }
+
+    // .venv/lib/pythonX.Y/site-packages/NAME/...
+    if rel_path.starts_with(".venv/") || rel_path.starts_with("venv/") {
+        if let Some(sp_pos) = rel_path.find("site-packages/") {
+            let after_sp = &rel_path[sp_pos + 14..];
+            if let Some(slash) = after_sp.find('/') {
+                return Some(after_sp[..slash].to_string());
+            }
+            return Some(after_sp.to_string());
+        }
+    }
+
+    None
+}
+
+/// Rules that are handled by the AST engine when the file is JS/TS
+fn is_ast_rule(rule_id: &str) -> bool {
+    matches!(rule_id, "DEPSEC-P001" | "DEPSEC-P008")
+}
+
 fn is_binary_ext(path: &Path) -> bool {
     let ext = path
         .extension()
@@ -231,6 +391,21 @@ fn is_binary_ext(path: &Path) -> bool {
         .map(|e| format!(".{e}"))
         .unwrap_or_default();
     BINARY_EXTENSIONS.contains(&ext.as_str())
+}
+
+fn is_skip_ext(path: &Path) -> bool {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    // Check compound extensions like .d.ts, .d.ts.map
+    SKIP_EXTENSIONS.iter().any(|ext| name.ends_with(ext))
+}
+
+fn should_skip_dir(name: &str) -> bool {
+    SKIP_DIR_NAMES.contains(&name)
+}
+
+fn is_skip_filename(path: &Path) -> bool {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    SKIP_FILENAMES.contains(&name)
 }
 
 fn is_install_script(path: &Path, _line: &str) -> bool {
@@ -255,6 +430,7 @@ fn check_entropy(content: &str, file: &str, findings: &mut Vec<Finding>) {
                     findings.push(Finding {
                         rule_id: "DEPSEC-P007".into(),
                         severity: Severity::Medium,
+                        confidence: Some(Confidence::Low),
                         message: format!(
                             "High-entropy string detected ({:.1} bits/char, {} chars)",
                             entropy,
@@ -263,6 +439,7 @@ fn check_entropy(content: &str, file: &str, findings: &mut Vec<Finding>) {
                         file: Some(file.into()),
                         line: Some(line_num + 1),
                         suggestion: Some("Review this string — may be an encoded payload".into()),
+                        package: extract_package_name(file),
                         auto_fixable: false,
                     });
                     break; // One finding per line is enough
@@ -332,6 +509,7 @@ fn check_pth_files(root: &Path, findings: &mut Vec<Finding>) {
                     findings.push(Finding {
                         rule_id: "DEPSEC-P009".into(),
                         severity: Severity::Critical,
+                        confidence: Some(Confidence::High),
                         message: format!(
                             ".pth file with executable code: contains '{keyword}'"
                         ),
@@ -340,6 +518,7 @@ fn check_pth_files(root: &Path, findings: &mut Vec<Finding>) {
                         suggestion: Some(
                             "Python .pth files execute on every interpreter startup — review or remove immediately".into(),
                         ),
+                        package: None,
                         auto_fixable: false,
                     });
                     break; // One finding per file is enough
@@ -401,6 +580,7 @@ fn check_install_scripts(root: &Path, findings: &mut Vec<Finding>) {
                 findings.push(Finding {
                     rule_id: "DEPSEC-P012".into(),
                     severity: Severity::High,
+                    confidence: Some(Confidence::High),
                     message: format!(
                         "Install script '{}' executes suspicious command: {}",
                         hook,
@@ -411,6 +591,7 @@ fn check_install_scripts(root: &Path, findings: &mut Vec<Finding>) {
                     suggestion: Some(format!(
                         "Review the '{hook}' script — install scripts are a common attack vector"
                     )),
+                    package: None,
                     auto_fixable: false,
                 });
             }
@@ -473,5 +654,83 @@ mod tests {
                 rule.pattern
             );
         }
+    }
+
+    #[test]
+    fn test_is_skip_ext() {
+        assert!(is_skip_ext(Path::new("devalue.js.map")));
+        assert!(is_skip_ext(Path::new("types.d.ts")));
+        assert!(is_skip_ext(Path::new("module.d.mts")));
+        assert!(is_skip_ext(Path::new("cjs.d.cts")));
+        assert!(!is_skip_ext(Path::new("index.js")));
+        assert!(!is_skip_ext(Path::new("utils.ts")));
+        assert!(!is_skip_ext(Path::new("main.py")));
+    }
+
+    #[test]
+    fn test_should_skip_dir() {
+        assert!(should_skip_dir(".vite"));
+        // test/tests/spec are NOT skipped (security: malicious packages hide payloads there)
+        assert!(!should_skip_dir("test"));
+        assert!(!should_skip_dir("tests"));
+        assert!(!should_skip_dir("spec"));
+        assert!(!should_skip_dir("src"));
+        assert!(!should_skip_dir("lib"));
+        assert!(!should_skip_dir("dist"));
+    }
+
+    #[test]
+    fn test_is_skip_filename() {
+        assert!(is_skip_filename(Path::new("README.md")));
+        assert!(is_skip_filename(Path::new("CHANGELOG.md")));
+        assert!(is_skip_filename(Path::new("LICENSE")));
+        assert!(!is_skip_filename(Path::new("index.js")));
+        assert!(!is_skip_filename(Path::new("package.json")));
+    }
+
+    #[test]
+    fn test_extract_package_name_npm() {
+        assert_eq!(
+            extract_package_name("node_modules/lodash/index.js"),
+            Some("lodash".into())
+        );
+    }
+
+    #[test]
+    fn test_extract_package_name_scoped() {
+        assert_eq!(
+            extract_package_name("node_modules/@sveltejs/kit/src/lib.js"),
+            Some("@sveltejs/kit".into())
+        );
+    }
+
+    #[test]
+    fn test_extract_package_name_nested() {
+        // Should return innermost package
+        assert_eq!(
+            extract_package_name("node_modules/pkg-a/node_modules/pkg-b/lib/evil.js"),
+            Some("pkg-b".into())
+        );
+    }
+
+    #[test]
+    fn test_extract_package_name_vendor_gems() {
+        assert_eq!(
+            extract_package_name("vendor/bundle/ruby/3.2.0/gems/rails-7.1.0/lib/active.rb"),
+            Some("rails-7.1.0".into())
+        );
+    }
+
+    #[test]
+    fn test_extract_package_name_venv() {
+        assert_eq!(
+            extract_package_name(".venv/lib/python3.11/site-packages/requests/api.py"),
+            Some("requests".into())
+        );
+    }
+
+    #[test]
+    fn test_extract_package_name_unknown() {
+        assert_eq!(extract_package_name("src/main.rs"), None);
     }
 }

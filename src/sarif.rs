@@ -113,6 +113,8 @@ mod tests {
             file: Some(".github/workflows/ci.yml".into()),
             line: Some(10),
             suggestion: Some("Pin to SHA".into()),
+            confidence: None,
+            package: None,
             auto_fixable: true,
         }];
 

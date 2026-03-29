@@ -132,6 +132,8 @@ mod tests {
             file: None,
             line: None,
             suggestion: None,
+            confidence: None,
+            package: None,
             auto_fixable: false,
         }];
         let score = compute_category_score(25.0, &findings);

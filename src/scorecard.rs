@@ -189,6 +189,8 @@ mod tests {
             file: None,
             line: None,
             suggestion: None,
+            confidence: None,
+            package: None,
             auto_fixable: false,
         }];
         let results = vec![

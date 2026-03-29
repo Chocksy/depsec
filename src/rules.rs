@@ -178,6 +178,8 @@ pub fn apply_rules(rules: &[RuleDef], root: &Path) -> Vec<Finding> {
                                 } else {
                                     Some(rule.description.clone())
                                 },
+                                confidence: None,
+                                package: None,
                                 auto_fixable: false,
                             });
                             break; // One match per line per rule

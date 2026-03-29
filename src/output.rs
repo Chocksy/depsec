@@ -1,5 +1,8 @@
-use crate::checks::{CheckResult, Severity};
+use std::collections::BTreeMap;
+
+use crate::checks::{CheckResult, Confidence, Finding, Severity};
 use crate::scoring::{compute_grade, compute_total_score, Grade};
+use crate::Persona;
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ScanReport {
@@ -24,8 +27,54 @@ impl ScanReport {
     }
 }
 
-pub fn render_human(report: &ScanReport, use_color: bool) -> String {
+/// Check if a finding is visible under the given persona filter
+pub fn finding_visible(finding: &Finding, persona: Persona) -> bool {
+    finding_passes_persona(finding, persona)
+}
+
+fn finding_passes_persona(finding: &Finding, persona: Persona) -> bool {
+    let min_confidence = match persona {
+        Persona::Regular => Confidence::High,
+        Persona::Pedantic => Confidence::Medium,
+        Persona::Auditor => Confidence::Low,
+    };
+
+    match finding.confidence {
+        // Findings without confidence (non-pattern checks) always pass
+        None => true,
+        Some(conf) => conf >= min_confidence,
+    }
+}
+
+pub fn render_human(
+    report: &ScanReport,
+    use_color: bool,
+    persona: Persona,
+    verbose: bool,
+) -> String {
     let mut out = String::new();
+
+    // Recompute score with persona-filtered findings for a fair grade
+    let filtered_results: Vec<CheckResult> = report
+        .results
+        .iter()
+        .map(|r| {
+            let filtered_findings: Vec<Finding> = r
+                .findings
+                .iter()
+                .filter(|f| verbose || finding_passes_persona(f, persona))
+                .cloned()
+                .collect();
+            CheckResult::new(
+                r.category.clone(),
+                filtered_findings,
+                r.max_score,
+                r.pass_messages.clone(),
+            )
+        })
+        .collect();
+    let filtered_score = compute_total_score(&filtered_results);
+    let filtered_grade = compute_grade(filtered_score);
 
     out.push_str(&format!(
         "depsec v{} — Supply Chain Security Scanner\n\n",
@@ -34,9 +83,12 @@ pub fn render_human(report: &ScanReport, use_color: bool) -> String {
     out.push_str(&format!("Project: {}\n", report.project_name));
     out.push_str(&format!(
         "Grade: {} ({:.1}/10)\n",
-        format_grade(&report.grade, use_color),
-        report.total_score / 10.0,
+        format_grade(&filtered_grade, use_color),
+        filtered_score / 10.0,
     ));
+
+    let dim = if use_color { "\x1b[90m" } else { "" };
+    let reset = if use_color { "\x1b[0m" } else { "" };
 
     for result in &report.results {
         out.push('\n');
@@ -54,35 +106,132 @@ pub fn render_human(report: &ScanReport, use_color: bool) -> String {
             ));
         }
 
-        for finding in &result.findings {
-            let icon = match finding.severity {
-                Severity::Critical | Severity::High => {
-                    if use_color {
-                        "\x1b[31m✗\x1b[0m"
-                    } else {
-                        "✗"
-                    }
+        let mut hidden_count = 0usize;
+
+        // Separate visible from hidden findings
+        let visible: Vec<&Finding> = result
+            .findings
+            .iter()
+            .filter(|f| {
+                if verbose || finding_passes_persona(f, persona) {
+                    true
+                } else {
+                    hidden_count += 1;
+                    false
                 }
-                Severity::Medium | Severity::Low => {
-                    if use_color {
-                        "\x1b[33m⚠\x1b[0m"
-                    } else {
-                        "⚠"
-                    }
+            })
+            .collect();
+
+        // Check if this category has package-able findings for aggregation
+        let has_packages = visible.iter().any(|f| f.package.is_some());
+
+        if !verbose && has_packages {
+            // Aggregate mode: group by package
+            let mut by_package: BTreeMap<String, Vec<&Finding>> = BTreeMap::new();
+            let mut no_package: Vec<&Finding> = Vec::new();
+
+            for f in &visible {
+                match &f.package {
+                    Some(pkg) => by_package.entry(pkg.clone()).or_default().push(f),
+                    None => no_package.push(f),
                 }
-            };
-
-            let location = match (&finding.file, finding.line) {
-                (Some(f), Some(l)) => format!(" ({f}:{l})"),
-                (Some(f), None) => format!(" ({f})"),
-                _ => String::new(),
-            };
-
-            out.push_str(&format!("  {} {}{}\n", icon, finding.message, location));
-
-            if let Some(suggestion) = &finding.suggestion {
-                out.push_str(&format!("    → {suggestion}\n"));
             }
+
+            // Render non-packaged findings individually (workflows, hygiene, etc.)
+            for finding in &no_package {
+                render_finding(&mut out, finding, use_color);
+            }
+
+            // Render packaged findings aggregated
+            for (pkg, findings) in &by_package {
+                let count = findings.len();
+                let max_severity = findings
+                    .iter()
+                    .map(|f| f.severity)
+                    .max()
+                    .unwrap_or(Severity::Low);
+                let max_confidence = findings
+                    .iter()
+                    .filter_map(|f| f.confidence)
+                    .max()
+                    .unwrap_or(Confidence::Low);
+
+                let icon = match max_severity {
+                    Severity::Critical | Severity::High => {
+                        if use_color {
+                            "\x1b[31m✗\x1b[0m"
+                        } else {
+                            "✗"
+                        }
+                    }
+                    _ => {
+                        if use_color {
+                            "\x1b[33m⚠\x1b[0m"
+                        } else {
+                            "⚠"
+                        }
+                    }
+                };
+
+                // Collect unique rule descriptions
+                let mut rules: Vec<&str> = findings
+                    .iter()
+                    .map(|f| f.rule_id.as_str())
+                    .collect::<std::collections::HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                rules.sort();
+
+                let conf_label = format!("{max_confidence:?}").to_lowercase();
+                out.push_str(&format!(
+                    "  {icon} {pkg} — {count} finding{s} ({rules}, confidence: {conf_label})\n",
+                    s = if count == 1 { "" } else { "s" },
+                    rules = rules.join(", "),
+                ));
+
+                // Show top 3 locations
+                let top_locations: Vec<String> = findings
+                    .iter()
+                    .take(3)
+                    .filter_map(|f| {
+                        f.file.as_ref().map(|file| match f.line {
+                            Some(l) => format!("{file}:{l}"),
+                            None => file.clone(),
+                        })
+                    })
+                    .collect();
+                if !top_locations.is_empty() {
+                    let more = if count > 3 {
+                        format!(" +{} more", count - 3)
+                    } else {
+                        String::new()
+                    };
+                    out.push_str(&format!(
+                        "    {dim}Top: {}{more}{reset}\n",
+                        top_locations.join(", "),
+                    ));
+                }
+
+                if let Some(suggestion) = &findings[0].suggestion {
+                    out.push_str(&format!("    → {suggestion}\n"));
+                }
+            }
+        } else {
+            // Verbose mode or no packages: render individually
+            for finding in &visible {
+                render_finding(&mut out, finding, use_color);
+            }
+        }
+
+        if hidden_count > 0 {
+            let persona_hint = match persona {
+                Persona::Regular => "--persona pedantic",
+                Persona::Pedantic => "--persona auditor",
+                Persona::Auditor => "--verbose",
+            };
+            out.push_str(&format!(
+                "  {dim}+{hidden_count} hidden findings (use {persona_hint} to see){reset}\n"
+            ));
         }
     }
 
@@ -101,15 +250,53 @@ pub fn render_human(report: &ScanReport, use_color: bool) -> String {
         ));
     }
 
-    // ASCII scorecard
+    // ASCII scorecard — use filtered results for fair display
+    let filtered_report = ScanReport {
+        version: report.version.clone(),
+        project_name: report.project_name.clone(),
+        results: filtered_results,
+        total_score: filtered_score,
+        grade: filtered_grade,
+    };
     out.push('\n');
-    out.push_str(&render_ascii_scorecard(report, use_color));
+    out.push_str(&render_ascii_scorecard(&filtered_report, use_color));
 
     out
 }
 
 pub fn render_json(report: &ScanReport) -> anyhow::Result<String> {
     Ok(serde_json::to_string_pretty(report)?)
+}
+
+fn render_finding(out: &mut String, finding: &Finding, use_color: bool) {
+    let icon = match finding.severity {
+        Severity::Critical | Severity::High => {
+            if use_color {
+                "\x1b[31m✗\x1b[0m"
+            } else {
+                "✗"
+            }
+        }
+        Severity::Medium | Severity::Low => {
+            if use_color {
+                "\x1b[33m⚠\x1b[0m"
+            } else {
+                "⚠"
+            }
+        }
+    };
+
+    let location = match (&finding.file, finding.line) {
+        (Some(f), Some(l)) => format!(" ({f}:{l})"),
+        (Some(f), None) => format!(" ({f})"),
+        _ => String::new(),
+    };
+
+    out.push_str(&format!("  {} {}{}\n", icon, finding.message, location));
+
+    if let Some(suggestion) = &finding.suggestion {
+        out.push_str(&format!("    → {suggestion}\n"));
+    }
 }
 
 fn format_grade(grade: &Grade, use_color: bool) -> String {
@@ -231,7 +418,7 @@ mod tests {
     #[test]
     fn test_render_human_empty() {
         let report = ScanReport::new("test-project".into(), vec![]);
-        let output = render_human(&report, false);
+        let output = render_human(&report, false, Persona::Auditor, false);
         assert!(output.contains("test-project"));
         assert!(output.contains("Grade: A"));
     }

@@ -1,3 +1,4 @@
+mod ast;
 mod baseline;
 mod checks;
 mod config;
@@ -17,7 +18,17 @@ mod shellhook;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum Persona {
+    /// High-confidence findings only (default — minimal noise)
+    Regular,
+    /// Medium+ confidence findings
+    Pedantic,
+    /// All findings including low confidence
+    Auditor,
+}
 
 #[derive(Parser)]
 #[command(name = "depsec", version, about = "Supply Chain Security Scanner")]
@@ -49,6 +60,14 @@ enum Commands {
         /// Output format: human (default), json, sarif
         #[arg(long, value_name = "FORMAT")]
         format: Option<String>,
+
+        /// Finding visibility level: regular (high-confidence only), pedantic (medium+), auditor (all)
+        #[arg(long, value_enum, default_value = "regular")]
+        persona: Persona,
+
+        /// Show all findings (no persona filtering, no aggregation)
+        #[arg(long)]
+        verbose: bool,
     },
 
     /// Auto-fix security issues
@@ -189,6 +208,8 @@ fn main() -> ExitCode {
             checks,
             json,
             format,
+            persona,
+            verbose,
         } => {
             let root = match path.canonicalize() {
                 Ok(p) => p,
@@ -222,13 +243,18 @@ fn main() -> ExitCode {
                             }
                         },
                         _ => {
-                            print!("{}", output::render_human(&report, color));
+                            print!("{}", output::render_human(&report, color, persona, verbose));
                         }
                     }
 
-                    let has_findings = report.results.iter().any(|r| !r.findings.is_empty());
+                    // Exit code respects persona: only visible findings cause non-zero exit
+                    let has_visible_findings = report.results.iter().any(|r| {
+                        r.findings
+                            .iter()
+                            .any(|f| verbose || output::finding_visible(f, persona))
+                    });
 
-                    if has_findings {
+                    if has_visible_findings {
                         ExitCode::from(1)
                     } else {
                         ExitCode::SUCCESS

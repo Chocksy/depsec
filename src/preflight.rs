@@ -335,6 +335,7 @@ fn check_package_json_scripts(root: &Path, findings: &mut Vec<Finding>) {
                 suggestion: Some(format!(
                     "Review the '{hook}' script — install hooks run automatically during npm install"
                 )),
+                confidence: None, package: None,
                 auto_fixable: false,
             });
         }
@@ -370,6 +371,7 @@ fn check_typosquatting(pkg: &parsers::Package, findings: &mut Vec<Finding>) {
                     "Verify you intended to install '{}' and not '{top_pkg}'",
                     pkg.name
                 )),
+                confidence: None, package: None,
                 auto_fixable: false,
             });
             break; // One match per package is enough
@@ -432,7 +434,8 @@ fn check_lockfile_hashes(root: &Path, findings: &mut Vec<Finding>) {
                             file: Some("package-lock.json".into()),
                             line: None,
                             suggestion: Some("Regenerate lockfile with 'npm install' to add integrity hashes".into()),
-                            auto_fixable: false,
+                            confidence: None, package: None,
+                auto_fixable: false,
                         });
                     }
                 }
@@ -491,6 +494,8 @@ fn check_package_metadata(packages: &[parsers::Package], findings: &mut Vec<Find
                     suggestion: Some(
                         "Newly published packages near popular names may be typosquats".into(),
                     ),
+                    confidence: None,
+                    package: None,
                     auto_fixable: false,
                 });
             }
@@ -518,6 +523,8 @@ fn check_package_metadata(packages: &[parsers::Package], findings: &mut Vec<Find
                 file: None,
                 line: None,
                 suggestion: Some("Packages without source repos are harder to audit".into()),
+                confidence: None,
+                package: None,
                 auto_fixable: false,
             });
         }

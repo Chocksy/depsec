@@ -198,6 +198,8 @@ impl Check for SecretsCheck {
                                 "Remove {} and use environment variables instead",
                                 sp.name
                             )),
+                            confidence: None,
+                            package: None,
                             auto_fixable: false,
                         });
                     }

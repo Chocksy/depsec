@@ -17,6 +17,14 @@ pub enum Severity {
     Critical,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Confidence {
+    Low,
+    Medium,
+    High,
+}
+
 impl std::fmt::Display for Severity {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -43,6 +51,8 @@ impl Severity {
 pub struct Finding {
     pub rule_id: String,
     pub severity: Severity,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<Confidence>,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub file: Option<String>,
@@ -50,6 +60,8 @@ pub struct Finding {
     pub line: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suggestion: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
     pub auto_fixable: bool,
 }
 

@@ -1,0 +1,600 @@
+use std::collections::HashSet;
+
+use streaming_iterator::StreamingIterator;
+use tree_sitter::{Parser, Query, QueryCursor};
+
+use crate::checks::{Confidence, Severity};
+
+use super::AstFinding;
+
+/// Dangerous modules whose exec/spawn calls should be flagged
+const DANGEROUS_MODULES: &[&str] = &["child_process", "shelljs", "execa", "cross-spawn"];
+
+/// Dangerous method names on those modules
+const DANGEROUS_METHODS: &[&str] = &[
+    "exec",
+    "execSync",
+    "spawn",
+    "spawnSync",
+    "execFile",
+    "execFileSync",
+];
+
+/// Analyze JavaScript/TypeScript source for security patterns
+pub fn analyze(parser: &mut Parser, source: &str) -> Vec<AstFinding> {
+    let tree = match parser.parse(source, None) {
+        Some(t) => t,
+        None => return vec![],
+    };
+
+    let source_bytes = source.as_bytes();
+    let mut findings = Vec::new();
+
+    // Pass 1: Find dangerous module imports
+    let dangerous_aliases = find_dangerous_imports(&tree, source_bytes);
+
+    // Pass 2: Find exec/spawn calls on dangerous aliases
+    if !dangerous_aliases.is_empty() {
+        find_dangerous_calls(&tree, source_bytes, &dangerous_aliases, &mut findings);
+    }
+
+    // P008: Find new Function() with variable args
+    find_dynamic_function(&tree, source_bytes, &mut findings);
+
+    findings
+}
+
+/// Pass 1: Scan for require('child_process') and import statements
+fn find_dangerous_imports(tree: &tree_sitter::Tree, source: &[u8]) -> HashSet<String> {
+    let mut aliases = HashSet::new();
+
+    // Query: const X = require('child_process')
+    // Also: const { exec, spawn } = require('child_process')
+    let require_query = Query::new(
+        &tree.language(),
+        r#"
+        (call_expression
+          function: (identifier) @req_fn
+          arguments: (arguments
+            (string (string_fragment) @module))
+          (#eq? @req_fn "require"))
+        "#,
+    );
+
+    if let Ok(query) = require_query {
+        let module_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "module")
+            .unwrap();
+
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), source);
+
+        while let Some(m) = matches.next() {
+            // Get the module name
+            let module_cap = m.captures.iter().find(|c| c.index as usize == module_idx);
+            if let Some(cap) = module_cap {
+                let module_name = cap.node.utf8_text(source).unwrap_or("");
+                if !DANGEROUS_MODULES.contains(&module_name) {
+                    continue;
+                }
+
+                // Walk up to find the variable_declarator parent
+                let call_node = m.captures[0].node.parent(); // call_expression
+                if let Some(call) = call_node {
+                    if let Some(declarator) = call.parent() {
+                        if declarator.kind() == "variable_declarator" {
+                            if let Some(name_node) = declarator.child_by_field_name("name") {
+                                match name_node.kind() {
+                                    "identifier" => {
+                                        // const cp = require('child_process')
+                                        if let Ok(name) = name_node.utf8_text(source) {
+                                            aliases.insert(name.to_string());
+                                        }
+                                    }
+                                    "object_pattern" => {
+                                        // const { exec, spawn } = require('child_process')
+                                        let mut child_cursor = name_node.walk();
+                                        for child in name_node.children(&mut child_cursor) {
+                                            if child.kind()
+                                                == "shorthand_property_identifier_pattern"
+                                            {
+                                                if let Ok(name) = child.utf8_text(source) {
+                                                    aliases.insert(name.to_string());
+                                                }
+                                            }
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Query: import { exec } from 'child_process'
+    // Also: import cp from 'child_process'
+    let import_query = Query::new(
+        &tree.language(),
+        r#"
+        (import_statement
+          source: (string (string_fragment) @module))
+        "#,
+    );
+
+    if let Ok(query) = import_query {
+        let module_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "module")
+            .unwrap();
+
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), source);
+
+        while let Some(m) = matches.next() {
+            let module_cap = m.captures.iter().find(|c| c.index as usize == module_idx);
+            if let Some(cap) = module_cap {
+                let module_name = cap.node.utf8_text(source).unwrap_or("");
+                if !DANGEROUS_MODULES.contains(&module_name) {
+                    continue;
+                }
+
+                // Walk up to import_statement and extract imported names
+                let import_stmt = cap.node.parent().and_then(|p| p.parent()); // string -> import_statement
+                if let Some(stmt) = import_stmt {
+                    let mut stmt_cursor = stmt.walk();
+                    for child in stmt.children(&mut stmt_cursor) {
+                        if child.kind() == "import_clause" {
+                            extract_import_names(&child, source, &mut aliases);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    aliases
+}
+
+/// Extract imported identifiers from an import clause
+fn extract_import_names(clause: &tree_sitter::Node, source: &[u8], aliases: &mut HashSet<String>) {
+    let mut cursor = clause.walk();
+    for child in clause.children(&mut cursor) {
+        match child.kind() {
+            "identifier" => {
+                // import cp from '...'
+                if let Ok(name) = child.utf8_text(source) {
+                    aliases.insert(name.to_string());
+                }
+            }
+            "named_imports" => {
+                // import { exec, spawn } from '...'
+                let mut named_cursor = child.walk();
+                for spec in child.children(&mut named_cursor) {
+                    if spec.kind() == "import_specifier" {
+                        // Use the local name (after 'as') if present, otherwise the imported name
+                        let local = spec
+                            .child_by_field_name("alias")
+                            .or_else(|| spec.child_by_field_name("name"));
+                        if let Some(name_node) = local {
+                            if let Ok(name) = name_node.utf8_text(source) {
+                                aliases.insert(name.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            "namespace_import" => {
+                // import * as cp from '...'
+                let mut ns_cursor = child.walk();
+                for ns_child in child.children(&mut ns_cursor) {
+                    if ns_child.kind() == "identifier" {
+                        if let Ok(name) = ns_child.utf8_text(source) {
+                            aliases.insert(name.to_string());
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Pass 2: Find exec/spawn calls on dangerous aliases
+fn find_dangerous_calls(
+    tree: &tree_sitter::Tree,
+    source: &[u8],
+    dangerous_aliases: &HashSet<String>,
+    findings: &mut Vec<AstFinding>,
+) {
+    // Query: obj.method(args)
+    let method_query = Query::new(
+        &tree.language(),
+        r#"
+        (call_expression
+          function: (member_expression
+            object: (identifier) @obj
+            property: (property_identifier) @method)
+          arguments: (arguments) @args)
+        "#,
+    );
+
+    if let Ok(query) = method_query {
+        let obj_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "obj")
+            .unwrap();
+        let method_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "method")
+            .unwrap();
+        let args_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "args")
+            .unwrap();
+
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), source);
+
+        while let Some(m) = matches.next() {
+            let obj_cap = m.captures.iter().find(|c| c.index as usize == obj_idx);
+            let method_cap = m.captures.iter().find(|c| c.index as usize == method_idx);
+            let args_cap = m.captures.iter().find(|c| c.index as usize == args_idx);
+            let (Some(obj_cap), Some(method_cap), Some(args_cap)) = (obj_cap, method_cap, args_cap)
+            else {
+                continue;
+            };
+
+            let obj_text = obj_cap.node.utf8_text(source).unwrap_or("");
+            let method_text = method_cap.node.utf8_text(source).unwrap_or("");
+
+            if !dangerous_aliases.contains(obj_text) {
+                continue;
+            }
+            if !DANGEROUS_METHODS.contains(&method_text) {
+                continue;
+            }
+
+            let severity = classify_arg_severity(&args_cap.node, source);
+            let line = obj_cap.node.start_position().row + 1;
+
+            findings.push(AstFinding {
+                rule_id: "DEPSEC-P001".into(),
+                severity,
+                confidence: Confidence::High,
+                message: format!(
+                    "{obj_text}.{method_text}() with {} argument",
+                    severity_arg_label(&severity)
+                ),
+                line,
+            });
+        }
+    }
+
+    // Query: direct call exec(args) — for destructured imports
+    let direct_query = Query::new(
+        &tree.language(),
+        r#"
+        (call_expression
+          function: (identifier) @func
+          arguments: (arguments) @args)
+        "#,
+    );
+
+    if let Ok(query) = direct_query {
+        let func_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "func")
+            .unwrap();
+        let args_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "args")
+            .unwrap();
+
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), source);
+
+        while let Some(m) = matches.next() {
+            let func_cap = m.captures.iter().find(|c| c.index as usize == func_idx);
+            let args_cap = m.captures.iter().find(|c| c.index as usize == args_idx);
+            let (Some(func_cap), Some(args_cap)) = (func_cap, args_cap) else {
+                continue;
+            };
+
+            let func_text = func_cap.node.utf8_text(source).unwrap_or("");
+
+            // For direct calls, only check alias membership — no DANGEROUS_METHODS filter.
+            // If it came from a dangerous module (e.g., execa), any call is suspicious.
+            if !dangerous_aliases.contains(func_text) {
+                continue;
+            }
+
+            let severity = classify_arg_severity(&args_cap.node, source);
+            let line = func_cap.node.start_position().row + 1;
+
+            findings.push(AstFinding {
+                rule_id: "DEPSEC-P001".into(),
+                severity,
+                confidence: Confidence::High,
+                message: format!(
+                    "{func_text}() with {} argument (destructured import)",
+                    severity_arg_label(&severity)
+                ),
+                line,
+            });
+        }
+    }
+}
+
+/// Classify severity based on the first argument's type
+fn classify_arg_severity(args_node: &tree_sitter::Node, _source: &[u8]) -> Severity {
+    // Get the first argument (skip opening paren)
+    let first_arg = args_node
+        .children(&mut args_node.walk())
+        .find(|c| c.kind() != "(" && c.kind() != ")" && c.kind() != ",");
+
+    match first_arg {
+        None => Severity::High, // No args — conservative
+        Some(arg) => match arg.kind() {
+            "string" | "string_fragment" => Severity::Medium, // Static string
+            "template_string" => {
+                // Check if it has interpolation
+                let mut cursor = arg.walk();
+                let has_substitution = arg
+                    .children(&mut cursor)
+                    .any(|c| c.kind() == "template_substitution");
+                if has_substitution {
+                    Severity::Critical // Template with interpolation
+                } else {
+                    Severity::Medium // Static template
+                }
+            }
+            _ => Severity::High, // Variable or complex expression
+        },
+    }
+}
+
+fn severity_arg_label(severity: &Severity) -> &'static str {
+    match severity {
+        Severity::Critical => "interpolated template",
+        Severity::High => "variable",
+        Severity::Medium => "static string",
+        Severity::Low => "unknown",
+    }
+}
+
+/// P008: Find new Function() with variable args
+fn find_dynamic_function(tree: &tree_sitter::Tree, source: &[u8], findings: &mut Vec<AstFinding>) {
+    let query = Query::new(
+        &tree.language(),
+        r#"
+        (new_expression
+          constructor: (identifier) @ctor
+          arguments: (arguments) @args
+          (#eq? @ctor "Function"))
+        "#,
+    );
+
+    if let Ok(query) = query {
+        let args_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "args")
+            .unwrap();
+        let ctor_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "ctor")
+            .unwrap();
+
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), source);
+
+        while let Some(m) = matches.next() {
+            let args_cap = m.captures.iter().find(|c| c.index as usize == args_idx);
+            let ctor_cap = m.captures.iter().find(|c| c.index as usize == ctor_idx);
+            let (Some(args_cap), Some(ctor_cap)) = (args_cap, ctor_cap) else {
+                continue;
+            };
+
+            let severity = classify_arg_severity(&args_cap.node, source);
+            let line = ctor_cap.node.start_position().row + 1;
+
+            findings.push(AstFinding {
+                rule_id: "DEPSEC-P008".into(),
+                severity,
+                confidence: Confidence::High,
+                message: format!(
+                    "new Function() with {} argument",
+                    severity_arg_label(&severity)
+                ),
+                line,
+            });
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_js(source: &str) -> Vec<AstFinding> {
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_javascript::LANGUAGE.into())
+            .unwrap();
+        analyze(&mut parser, source)
+    }
+
+    #[test]
+    fn test_regex_exec_not_flagged() {
+        let findings = parse_js(
+            r#"
+            const re = /pattern/;
+            const result = re.exec("test string");
+        "#,
+        );
+        assert!(findings.is_empty(), "regex.exec() should NOT be flagged");
+    }
+
+    #[test]
+    fn test_child_process_exec_flagged() {
+        let findings = parse_js(
+            r#"
+            const cp = require('child_process');
+            cp.exec(userInput);
+        "#,
+        );
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].rule_id, "DEPSEC-P001");
+        assert_eq!(findings[0].confidence, Confidence::High);
+        assert_eq!(findings[0].severity, Severity::High);
+    }
+
+    #[test]
+    fn test_exec_destructured_import() {
+        let findings = parse_js(
+            r#"
+            const { exec, spawn } = require('child_process');
+            exec(command);
+        "#,
+        );
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].rule_id, "DEPSEC-P001");
+        assert!(findings[0].message.contains("destructured"));
+    }
+
+    #[test]
+    fn test_exec_es_import() {
+        let findings = parse_js(
+            r#"
+            import { exec } from 'child_process';
+            exec(command);
+        "#,
+        );
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].rule_id, "DEPSEC-P001");
+    }
+
+    #[test]
+    fn test_exec_static_string_medium() {
+        let findings = parse_js(
+            r#"
+            const cp = require('child_process');
+            cp.exec("ls -la");
+        "#,
+        );
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Medium);
+    }
+
+    #[test]
+    fn test_exec_template_literal_critical() {
+        let findings = parse_js(
+            r#"
+            const cp = require('child_process');
+            cp.exec(`ls ${userInput}`);
+        "#,
+        );
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Critical);
+    }
+
+    #[test]
+    fn test_no_imports_no_findings() {
+        let findings = parse_js(
+            r#"
+            const result = someObj.exec(data);
+            db.exec("SELECT * FROM users");
+            /regex/.exec("test");
+        "#,
+        );
+        assert!(findings.is_empty(), "No dangerous imports → no findings");
+    }
+
+    #[test]
+    fn test_shelljs_flagged() {
+        let findings = parse_js(
+            r#"
+            const shell = require('shelljs');
+            shell.exec(command);
+        "#,
+        );
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].rule_id, "DEPSEC-P001");
+    }
+
+    #[test]
+    fn test_new_function_variable() {
+        let findings = parse_js(
+            r#"
+            const fn = new Function(userCode);
+        "#,
+        );
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].rule_id, "DEPSEC-P008");
+        assert_eq!(findings[0].severity, Severity::High);
+        assert_eq!(findings[0].confidence, Confidence::High);
+    }
+
+    #[test]
+    fn test_new_function_static() {
+        let findings = parse_js(
+            r#"
+            const fn = new Function("return 1");
+        "#,
+        );
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].severity, Severity::Medium);
+    }
+
+    #[test]
+    fn test_execa_flagged() {
+        let findings = parse_js(
+            r#"
+            const execa = require('execa');
+            execa(command);
+        "#,
+        );
+        // execa is a dangerous module — direct calls should be flagged
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].rule_id, "DEPSEC-P001");
+        assert!(findings[0].message.contains("destructured import"));
+    }
+
+    #[test]
+    fn test_multiple_findings_same_file() {
+        let findings = parse_js(
+            r#"
+            const cp = require('child_process');
+            cp.exec(cmd1);
+            cp.spawn(cmd2);
+            cp.execSync(cmd3);
+        "#,
+        );
+        assert_eq!(findings.len(), 3);
+        assert!(findings.iter().all(|f| f.rule_id == "DEPSEC-P001"));
+    }
+
+    #[test]
+    fn test_namespace_import() {
+        let findings = parse_js(
+            r#"
+            import * as cp from 'child_process';
+            cp.exec(command);
+        "#,
+        );
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].rule_id, "DEPSEC-P001");
+    }
+}

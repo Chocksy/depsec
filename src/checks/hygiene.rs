@@ -49,6 +49,8 @@ fn check_security_md(ctx: &ScanContext, findings: &mut Vec<Finding>, pass: &mut 
             suggestion: Some(
                 "Create a SECURITY.md with vulnerability reporting instructions".into(),
             ),
+            confidence: None,
+            package: None,
             auto_fixable: false,
         });
     }
@@ -65,6 +67,8 @@ fn check_gitignore(ctx: &ScanContext, findings: &mut Vec<Finding>, pass: &mut Ve
             file: None,
             line: None,
             suggestion: Some("Create a .gitignore covering sensitive files".into()),
+            confidence: None,
+            package: None,
             auto_fixable: false,
         });
         return;
@@ -101,6 +105,8 @@ fn check_gitignore(ctx: &ScanContext, findings: &mut Vec<Finding>, pass: &mut Ve
                 "Add these patterns to .gitignore: {}",
                 missing.join(", ")
             )),
+            confidence: None,
+            package: None,
             auto_fixable: false,
         });
     }
@@ -153,6 +159,8 @@ fn check_lockfile_committed(
                         suggestion: Some(format!(
                             "Remove {lockfile} from .gitignore and commit it"
                         )),
+                        confidence: None,
+                        package: None,
                         auto_fixable: false,
                     });
                 }
@@ -217,6 +225,8 @@ fn check_branch_protection(ctx: &ScanContext, findings: &mut Vec<Finding>, pass:
                 suggestion: Some(format!(
                     "Enable at https://github.com/{owner}/{repo}/settings/branches"
                 )),
+                confidence: None,
+                package: None,
                 auto_fixable: false,
             });
         }

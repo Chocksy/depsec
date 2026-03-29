@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 use serde::Deserialize;
@@ -8,6 +9,18 @@ pub struct Config {
     pub ignore: IgnoreConfig,
     pub checks: ChecksConfig,
     pub scoring: ScoringConfig,
+    pub patterns: PatternsConfig,
+}
+
+/// Configuration for the patterns check
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PatternsConfig {
+    /// Per-package rule allowlisting: package name → list of rule IDs to suppress
+    /// Example: { "posthog-js" = ["DEPSEC-P001"], "vitest" = ["DEPSEC-P001"] }
+    pub allow: HashMap<String, Vec<String>>,
+    /// Additional directory names to skip inside dep dirs
+    pub skip_dirs: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -144,5 +157,31 @@ network = 10
         assert_eq!(scoring.weight_for("deps"), 20);
         assert_eq!(scoring.weight_for("patterns"), 10);
         assert_eq!(scoring.weight_for("unknown"), 0);
+    }
+
+    #[test]
+    fn test_patterns_config() {
+        let toml_str = r#"
+[patterns.allow]
+"posthog-js" = ["DEPSEC-P001"]
+"vitest" = ["DEPSEC-P001", "DEPSEC-P007"]
+
+[patterns]
+skip_dirs = ["custom-cache"]
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.patterns.allow.get("posthog-js").unwrap(),
+            &vec!["DEPSEC-P001".to_string()]
+        );
+        assert_eq!(config.patterns.allow.get("vitest").unwrap().len(), 2);
+        assert_eq!(config.patterns.skip_dirs, vec!["custom-cache"]);
+    }
+
+    #[test]
+    fn test_default_patterns_config() {
+        let config = Config::default();
+        assert!(config.patterns.allow.is_empty());
+        assert!(config.patterns.skip_dirs.is_empty());
     }
 }
