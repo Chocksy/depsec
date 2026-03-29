@@ -8,6 +8,7 @@ repository = "https://github.com/chocksy/depsec"
 readme = "README.md"
 keywords = ["security", "supply-chain", "scanner", "dependencies", "audit"]
 categories = ["command-line-utilities", "development-tools"]
+exclude = ["artifacts/", "docs/", "design-*.svg"]
 
 [dependencies]
 anyhow = "1"
