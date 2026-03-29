@@ -8,7 +8,12 @@ use crate::checks::{Check, CheckResult, Confidence, Finding, ScanContext, Severi
 
 struct PatternRule {
     rule_id: &'static str,
+    #[allow(dead_code)]
+    name: &'static str,
     description: &'static str,
+    suggestion: &'static str,
+    #[allow(dead_code)]
+    narrative: &'static str,
     pattern: &'static str,
     severity: Severity,
     confidence: Confidence,
@@ -17,63 +22,90 @@ struct PatternRule {
 const PATTERN_RULES: &[PatternRule] = &[
     PatternRule {
         rule_id: "DEPSEC-P001",
+        name: "Shell Execution",
         description: "eval()/exec() with decoded or variable input",
+        suggestion: "Verify commands are static or properly escaped — safe for build tools, suspicious for runtime libraries",
+        narrative: "Calls child_process.exec/spawn with variable arguments. If user-controlled, enables Remote Code Execution. Common in build tools where it's expected.",
         pattern: r"(?i)\b(eval|exec)\s*\(\s*[a-zA-Z_]",
         severity: Severity::High,
-        confidence: Confidence::Low, // High FP rate — regex can't distinguish regex.exec() from child_process.exec()
+        confidence: Confidence::Low,
     },
     PatternRule {
         rule_id: "DEPSEC-P002",
+        name: "Encoded Execution",
         description: "base64 decode → execute chain",
+        suggestion: "Investigate immediately — base64-to-exec is the #1 malware obfuscation pattern",
+        narrative: "Decodes base64/atob data and passes it to eval, exec, or Function. This is the #1 obfuscation pattern in npm malware. Legitimate uses are rare.",
         pattern: r#"(?i)(atob|base64[._\-]?decode|Buffer\.from\([^)]+,\s*['"]base64['"]).*\b(eval|exec|Function|spawn|child_process|require)\b"#,
         severity: Severity::Critical,
         confidence: Confidence::Medium,
     },
     PatternRule {
         rule_id: "DEPSEC-P003",
+        name: "Raw IP Network Call",
         description: "HTTP calls to raw IP addresses",
+        suggestion: "Check if the IP is a known service — raw IPs in production deps are suspicious",
+        narrative: "Makes HTTP requests to a hardcoded IP address instead of a domain. Malware uses raw IPs to avoid DNS-based blocking. Could also be local dev/testing.",
         pattern: r#"(?i)(https?://|fetch\s*\(\s*['"]https?://|request\s*\(\s*['"]https?://|axios\.\w+\s*\(\s*['"]https?://)\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}"#,
         severity: Severity::High,
         confidence: Confidence::Medium,
     },
     PatternRule {
         rule_id: "DEPSEC-P004",
+        name: "Credential Harvesting",
         description: "File reads targeting sensitive directories",
+        suggestion: "Remove immediately — no legitimate package reads your SSH keys or AWS credentials",
+        narrative: "Reads files from ~/.ssh, ~/.aws, ~/.env, or ~/.gnupg. These contain credentials and private keys. Legitimate packages never need to read your credentials.",
         pattern: r#"(?i)(readFile|read_file|open)\s*\(\s*['"]?(~/?\.(ssh|aws|env|gnupg)|/home/[^/]+/\.(ssh|aws|env|gnupg)|/root/\.(ssh|aws|env|gnupg))"#,
         severity: Severity::Critical,
         confidence: Confidence::High,
     },
     PatternRule {
         rule_id: "DEPSEC-P005",
+        name: "Steganographic Payload",
         description: "Binary file read → byte extraction → execution",
+        suggestion: "Investigate the binary file — hiding payloads in images/audio is a known malware technique",
+        narrative: "Reads binary files (.wav, .mp3, .png, .ico) and extracts bytes. A known malware technique: hide executable payload in media files to evade text scanners.",
         pattern: r"(?i)(readFileSync|read_file|open)\s*\(.*\.(wav|mp3|png|jpg|ico|bmp)\b",
         severity: Severity::Critical,
         confidence: Confidence::Medium,
     },
     PatternRule {
         rule_id: "DEPSEC-P006",
+        name: "Install Script Download",
         description: "postinstall/preinstall scripts with network calls",
+        suggestion: "Review the install script — legitimate uses include downloading prebuilt binaries",
+        narrative: "Install script makes network calls (curl, wget, fetch). These run automatically during npm install with full system access. Malware uses them to download second-stage payloads.",
         pattern: r"(?i)(curl|wget|fetch|https?\.get|request\(|axios\.\w+)\s*\(",
         severity: Severity::High,
         confidence: Confidence::High,
     },
     PatternRule {
         rule_id: "DEPSEC-P008",
+        name: "Dynamic Code Construction",
         description: "new Function() with dynamic input",
+        suggestion: "Expected for template engines — verify template inputs are properly escaped",
+        narrative: "Uses new Function() to create executable code from strings at runtime. Standard for template engines (ejs, pug, handlebars). Dangerous if the input string is user-controlled.",
         pattern: r"new\s+Function\s*\(\s*[a-zA-Z_]",
         severity: Severity::High,
         confidence: Confidence::Medium,
     },
     PatternRule {
         rule_id: "DEPSEC-P010",
+        name: "Cloud Credential Probing",
         description: "Cloud IMDS credential probing",
+        suggestion: "Remove immediately unless this is a cloud SDK — IMDS access from deps is a red flag",
+        narrative: "Accesses the cloud instance metadata service (169.254.169.254). IMDS provides IAM credentials and instance identity. If your code runs in cloud, this could steal credentials.",
         pattern: r"169\.254\.(169\.254|170\.2)\b",
         severity: Severity::Critical,
         confidence: Confidence::High,
     },
     PatternRule {
         rule_id: "DEPSEC-P011",
+        name: "Environment Exfiltration",
         description: "Environment variable serialization/exfiltration",
+        suggestion: "Check if serialized env is sent over the network — legitimate logging should filter secrets",
+        narrative: "Serializes process.env or os.environ to JSON. Environment variables often contain API keys and secrets. Serializing all of them is a prerequisite for exfiltration.",
         pattern: r"(?i)(JSON\.stringify\s*\(\s*process\.env|os\.environ\b|process\.env\b.*JSON|toJSON\(secrets\))",
         severity: Severity::High,
         confidence: Confidence::Medium,
@@ -224,6 +256,11 @@ impl Check for PatternsCheck {
                     let ast_findings = ast_analyzer.analyze(path, &content);
                     let pkg = extract_package_name(&rel_path);
                     for af in &ast_findings {
+                        let suggestion = match af.rule_id.as_str() {
+                            "DEPSEC-P001" => "Verify commands are static or properly escaped — safe for build tools, suspicious for runtime libraries",
+                            "DEPSEC-P008" => "Expected for template engines — verify template inputs are properly escaped",
+                            _ => "Review this dependency for suspicious behavior",
+                        };
                         findings.push(Finding {
                             rule_id: af.rule_id.clone(),
                             severity: af.severity,
@@ -231,7 +268,7 @@ impl Check for PatternsCheck {
                             message: af.message.clone(),
                             file: Some(rel_path.clone()),
                             line: Some(af.line),
-                            suggestion: Some("Review or remove this dependency".into()),
+                            suggestion: Some(suggestion.into()),
                             package: pkg.clone(),
                             auto_fixable: false,
                         });
@@ -263,7 +300,7 @@ impl Check for PatternsCheck {
                                 message: format!("{}: {snippet}", rule.description),
                                 file: Some(rel_path.clone()),
                                 line: Some(line_num + 1),
-                                suggestion: Some("Review or remove this dependency".into()),
+                                suggestion: Some(rule.suggestion.into()),
                                 package: extract_package_name(&rel_path),
                                 auto_fixable: false,
                             });
@@ -438,7 +475,7 @@ fn check_entropy(content: &str, file: &str, findings: &mut Vec<Finding>) {
                         ),
                         file: Some(file.into()),
                         line: Some(line_num + 1),
-                        suggestion: Some("Review this string — may be an encoded payload".into()),
+                        suggestion: Some("Check if the string is a known data table or if it decodes to executable code".into()),
                         package: extract_package_name(file),
                         auto_fixable: false,
                     });
@@ -516,7 +553,7 @@ fn check_pth_files(root: &Path, findings: &mut Vec<Finding>) {
                         file: Some(rel_path),
                         line: None,
                         suggestion: Some(
-                            "Python .pth files execute on every interpreter startup — review or remove immediately".into(),
+                            "Remove immediately — .pth files with executable code are almost always malicious".into(),
                         ),
                         package: None,
                         auto_fixable: false,

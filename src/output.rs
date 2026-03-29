@@ -1,8 +1,41 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use crate::checks::{CheckResult, Confidence, Finding, Severity};
 use crate::scoring::{compute_grade, compute_total_score, Grade};
 use crate::Persona;
+
+/// Rule metadata for the glossary and inline display
+struct RuleInfo {
+    name: &'static str,
+    narrative: &'static str,
+}
+
+fn rule_info(rule_id: &str) -> Option<RuleInfo> {
+    Some(match rule_id {
+        "DEPSEC-P001" => RuleInfo { name: "Shell Execution", narrative: "Calls child_process.exec/spawn with variable arguments. If user-controlled, enables Remote Code Execution. Common in build tools where it's expected." },
+        "DEPSEC-P002" => RuleInfo { name: "Encoded Execution", narrative: "Decodes base64/atob data and passes it to eval, exec, or Function. This is the #1 obfuscation pattern in npm malware. Legitimate uses are rare." },
+        "DEPSEC-P003" => RuleInfo { name: "Raw IP Network Call", narrative: "Makes HTTP requests to a hardcoded IP address. Malware uses raw IPs to avoid DNS blocking. Could also be local dev/testing." },
+        "DEPSEC-P004" => RuleInfo { name: "Credential Harvesting", narrative: "Reads files from ~/.ssh, ~/.aws, ~/.env, or ~/.gnupg. No legitimate package needs your credentials." },
+        "DEPSEC-P005" => RuleInfo { name: "Steganographic Payload", narrative: "Reads binary files (.wav, .png, .ico) and extracts bytes. Known malware technique: hide payloads in media files." },
+        "DEPSEC-P006" => RuleInfo { name: "Install Script Download", narrative: "Install script makes network calls. These run automatically during npm install with full system access." },
+        "DEPSEC-P007" => RuleInfo { name: "Encoded Payload", narrative: "High-entropy string (>4.5 bits/char). Could be base64 data, crypto keys, or obfuscated code. Also common in compression tables." },
+        "DEPSEC-P008" => RuleInfo { name: "Dynamic Code Construction", narrative: "Uses new Function() to create code from strings. Standard for template engines (ejs, pug). Dangerous if input is user-controlled." },
+        "DEPSEC-P009" => RuleInfo { name: "Python Startup Injection", narrative: "A .pth file with executable code. Python .pth files run on every interpreter startup — a powerful malware persistence mechanism." },
+        "DEPSEC-P010" => RuleInfo { name: "Cloud Credential Probing", narrative: "Accesses cloud instance metadata (169.254.169.254). IMDS provides IAM credentials. Could steal cloud credentials." },
+        "DEPSEC-P011" => RuleInfo { name: "Environment Exfiltration", narrative: "Serializes process.env to JSON. Environment variables often contain API keys and secrets." },
+        "DEPSEC-P012" => RuleInfo { name: "Suspicious Install Hook", narrative: "package.json install script contains suspicious commands. Install hooks run with full system access." },
+        _ => return None,
+    })
+}
+
+/// Get a short rule label like "P001: Shell Execution"
+fn rule_label(rule_id: &str) -> String {
+    let short = rule_id.strip_prefix("DEPSEC-").unwrap_or(rule_id);
+    match rule_info(rule_id) {
+        Some(info) => format!("{}: {}", short, info.name),
+        None => short.to_string(),
+    }
+}
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ScanReport {
@@ -173,12 +206,13 @@ pub fn render_human(
                     }
                 };
 
-                // Collect unique rule descriptions
-                let mut rules: Vec<&str> = findings
+                // Collect unique rule labels (e.g., "P001: Shell Execution")
+                let mut rules: Vec<String> = findings
                     .iter()
                     .map(|f| f.rule_id.as_str())
-                    .collect::<std::collections::HashSet<_>>()
+                    .collect::<HashSet<_>>()
                     .into_iter()
+                    .map(rule_label)
                     .collect();
                 rules.sort();
 
@@ -261,7 +295,74 @@ pub fn render_human(
     out.push('\n');
     out.push_str(&render_ascii_scorecard(&filtered_report, use_color));
 
+    // Rule glossary — only rules that triggered in this scan
+    let glossary = render_rule_glossary(report, use_color);
+    if !glossary.is_empty() {
+        out.push('\n');
+        out.push_str(&glossary);
+    }
+
     out
+}
+
+fn render_rule_glossary(report: &ScanReport, use_color: bool) -> String {
+    let dim = if use_color { "\x1b[90m" } else { "" };
+    let bold = if use_color { "\x1b[1m" } else { "" };
+    let reset = if use_color { "\x1b[0m" } else { "" };
+
+    // Collect unique P-rule IDs that triggered
+    let triggered_ids: HashSet<String> = report
+        .results
+        .iter()
+        .flat_map(|r| &r.findings)
+        .filter(|f| f.rule_id.starts_with("DEPSEC-P"))
+        .map(|f| f.rule_id.clone())
+        .collect();
+
+    let mut triggered: Vec<(String, RuleInfo)> = triggered_ids
+        .into_iter()
+        .filter_map(|id| rule_info(&id).map(|info| (id, info)))
+        .collect();
+    triggered.sort_by(|a, b| a.0.cmp(&b.0));
+
+    if triggered.is_empty() {
+        return String::new();
+    }
+
+    let mut out = format!("{bold}[Rule Guide]{reset}\n");
+
+    for (rule_id, info) in triggered.iter() {
+        let short = rule_id.strip_prefix("DEPSEC-").unwrap_or(rule_id);
+        out.push_str(&format!("  {bold}{short}{reset}  {}\n", info.name));
+        // Wrap narrative to ~72 chars with indent
+        for line in wrap_text(info.narrative, 70) {
+            out.push_str(&format!("  {dim}    {line}{reset}\n"));
+        }
+        out.push('\n');
+    }
+
+    out
+}
+
+fn wrap_text(text: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+
+    for word in text.split_whitespace() {
+        if current.is_empty() {
+            current = word.to_string();
+        } else if current.len() + 1 + word.len() > width {
+            lines.push(current);
+            current = word.to_string();
+        } else {
+            current.push(' ');
+            current.push_str(word);
+        }
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
 }
 
 pub fn render_json(report: &ScanReport) -> anyhow::Result<String> {
