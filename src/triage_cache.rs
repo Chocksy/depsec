@@ -42,14 +42,13 @@ fn cache_key(finding: &Finding, root: &Path) -> Option<String> {
     let mut hasher = Sha256::new();
     hasher.update(context.as_bytes());
     let hash = format!("{:x}", hasher.finalize());
-    let short_hash = &hash[..8];
+    let short_hash = &hash[..12]; // 12 hex chars = 48 bits, birthday collision at ~16M entries
 
-    Some(format!(
-        "{}/{}-{}.json",
-        package.replace('/', "_"),
-        finding.rule_id,
-        short_hash
-    ))
+    // Sanitize both package and rule_id for filesystem safety
+    let safe_pkg = package.replace('/', "_");
+    let safe_rule = finding.rule_id.replace('/', "_");
+
+    Some(format!("{safe_pkg}/{safe_rule}-{short_hash}.json"))
 }
 
 /// Look up a cached triage result

@@ -203,6 +203,13 @@ fn extract_json(content: &str) -> Option<String> {
         }
     }
 
+    // Last resort: find first { and last } — handles preamble text before JSON
+    if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}')) {
+        if end > start {
+            return Some(trimmed[start..=end].to_string());
+        }
+    }
+
     None
 }
 
