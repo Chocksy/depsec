@@ -3,6 +3,7 @@ mod baseline;
 mod checks;
 mod config;
 mod fixer;
+mod llm;
 mod monitor;
 mod output;
 mod parsers;
@@ -14,6 +15,8 @@ mod scorecard;
 mod scoring;
 mod selfcheck;
 mod shellhook;
+#[allow(unused)] // TODO: remove when triage_cache is wired
+mod triage;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -68,6 +71,14 @@ enum Commands {
         /// Show all findings (no persona filtering, no aggregation)
         #[arg(long)]
         verbose: bool,
+
+        /// Run LLM triage on findings (requires OPENROUTER_API_KEY)
+        #[arg(long)]
+        triage: bool,
+
+        /// Show what would be sent to LLM without making API calls
+        #[arg(long)]
+        triage_dry_run: bool,
     },
 
     /// Auto-fix security issues
@@ -210,6 +221,8 @@ fn main() -> ExitCode {
             format,
             persona,
             verbose,
+            triage,
+            triage_dry_run,
         } => {
             let root = match path.canonicalize() {
                 Ok(p) => p,
@@ -244,6 +257,56 @@ fn main() -> ExitCode {
                         },
                         _ => {
                             print!("{}", output::render_human(&report, color, persona, verbose));
+                        }
+                    }
+
+                    // LLM triage (optional)
+                    if triage || triage_dry_run {
+                        // Collect visible findings for triage
+                        let visible_findings: Vec<crate::checks::Finding> = report
+                            .results
+                            .iter()
+                            .flat_map(|r| &r.findings)
+                            .filter(|f| verbose || output::finding_visible(f, persona))
+                            .cloned()
+                            .collect();
+
+                        if visible_findings.is_empty() {
+                            eprintln!("No findings to triage.");
+                        } else if triage_dry_run {
+                            // Dry run: show what would be sent, no API calls needed
+                            triage::dry_run_findings(&visible_findings, &root, &config.triage);
+                        } else {
+                            // Real triage: requires API key
+                            let client = match llm::LlmClient::from_config(&config.triage) {
+                                Some(c) => c,
+                                None => {
+                                    llm::print_setup_instructions();
+                                    return ExitCode::from(2);
+                                }
+                            };
+
+                            let est_tokens = visible_findings.len() as u32 * 2000;
+                            let est_cost = client
+                                .estimate_cost(est_tokens, visible_findings.len() as u32 * 200);
+                            eprintln!(
+                                "\nTriaging {} findings with {} (~${:.4} estimated)...\n",
+                                visible_findings.len(),
+                                client.model(),
+                                est_cost,
+                            );
+
+                            let results = triage::triage_findings(
+                                &visible_findings,
+                                &root,
+                                &client,
+                                &config.triage,
+                            );
+
+                            print!(
+                                "{}",
+                                triage::render_triage_results(&visible_findings, &results, color)
+                            );
                         }
                     }
 
