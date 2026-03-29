@@ -1,8 +1,10 @@
 mod ast;
+mod audit;
 mod baseline;
 mod checks;
 mod config;
 mod fixer;
+mod llm;
 mod monitor;
 mod output;
 mod parsers;
@@ -14,6 +16,8 @@ mod scorecard;
 mod scoring;
 mod selfcheck;
 mod shellhook;
+mod triage;
+mod triage_cache;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -68,6 +72,14 @@ enum Commands {
         /// Show all findings (no persona filtering, no aggregation)
         #[arg(long)]
         verbose: bool,
+
+        /// Run LLM triage on findings (requires OPENROUTER_API_KEY)
+        #[arg(long)]
+        triage: bool,
+
+        /// Show what would be sent to LLM without making API calls
+        #[arg(long)]
+        triage_dry_run: bool,
     },
 
     /// Auto-fix security issues
@@ -148,12 +160,44 @@ enum Commands {
         output: PathBuf,
     },
 
+    /// Deep security audit of a specific package
+    Audit {
+        /// Package name to audit (e.g., shelljs, @scope/pkg)
+        package: String,
+
+        /// Path to the project root
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+
+        /// Preview what would be analyzed without calling LLM
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Maximum budget in USD
+        #[arg(long, default_value = "5.0")]
+        budget: f64,
+    },
+
+    /// Manage triage cache
+    Cache {
+        #[command(subcommand)]
+        action: CacheAction,
+    },
+
     /// Output badge markdown
     Badge {
         /// Path to the project root
         #[arg(default_value = ".")]
         path: PathBuf,
     },
+}
+
+#[derive(Subcommand)]
+enum CacheAction {
+    /// Clear all cached triage results
+    Clear,
+    /// Show cache statistics
+    Stats,
 }
 
 #[derive(Subcommand)]
@@ -210,6 +254,8 @@ fn main() -> ExitCode {
             format,
             persona,
             verbose,
+            triage,
+            triage_dry_run,
         } => {
             let root = match path.canonicalize() {
                 Ok(p) => p,
@@ -244,6 +290,56 @@ fn main() -> ExitCode {
                         },
                         _ => {
                             print!("{}", output::render_human(&report, color, persona, verbose));
+                        }
+                    }
+
+                    // LLM triage (optional)
+                    if triage || triage_dry_run {
+                        // Collect visible findings for triage
+                        let visible_findings: Vec<crate::checks::Finding> = report
+                            .results
+                            .iter()
+                            .flat_map(|r| &r.findings)
+                            .filter(|f| verbose || output::finding_visible(f, persona))
+                            .cloned()
+                            .collect();
+
+                        if visible_findings.is_empty() {
+                            eprintln!("No findings to triage.");
+                        } else if triage_dry_run {
+                            // Dry run: show what would be sent, no API calls needed
+                            triage::dry_run_findings(&visible_findings, &root, &config.triage);
+                        } else {
+                            // Real triage: requires API key
+                            let client = match llm::LlmClient::from_config(&config.triage) {
+                                Some(c) => c,
+                                None => {
+                                    llm::print_setup_instructions();
+                                    return ExitCode::from(2);
+                                }
+                            };
+
+                            let est_tokens = visible_findings.len() as u32 * 2000;
+                            let est_cost = client
+                                .estimate_cost(est_tokens, visible_findings.len() as u32 * 200);
+                            eprintln!(
+                                "\nTriaging {} findings with {} (~${:.4} estimated)...\n",
+                                visible_findings.len(),
+                                client.model(),
+                                est_cost,
+                            );
+
+                            let results = triage::triage_findings(
+                                &visible_findings,
+                                &root,
+                                &client,
+                                &config.triage,
+                            );
+
+                            print!(
+                                "{}",
+                                triage::render_triage_results(&visible_findings, &results, color)
+                            );
                         }
                     }
 
@@ -465,6 +561,93 @@ fn main() -> ExitCode {
                 }
             }
         }
+
+        Commands::Audit {
+            package,
+            path,
+            dry_run,
+            budget: _budget,
+        } => {
+            let root = match path.canonicalize() {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("Error: invalid path '{}': {e}", path.display());
+                    return ExitCode::from(2);
+                }
+            };
+
+            let config = config::load_config(&root);
+
+            // Locate and profile the package
+            let profile = match audit::locate_package(&package, &root) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    return ExitCode::from(2);
+                }
+            };
+
+            if dry_run {
+                print!(
+                    "{}",
+                    audit::render_audit_results(
+                        &audit::AuditResult {
+                            profile,
+                            findings: vec![],
+                            total_tokens: 0,
+                            rounds: 0,
+                        },
+                        color,
+                    )
+                );
+                return ExitCode::SUCCESS;
+            }
+
+            // Require API key for real audit
+            let client = match llm::LlmClient::from_config(&config.triage) {
+                Some(c) => c,
+                None => {
+                    llm::print_setup_instructions();
+                    return ExitCode::from(2);
+                }
+            };
+
+            match audit::run_audit(&profile, &client, &config.triage, false) {
+                Ok(result) => {
+                    print!("{}", audit::render_audit_results(&result, color));
+                    if result.findings.is_empty() {
+                        ExitCode::SUCCESS
+                    } else {
+                        ExitCode::from(1)
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error during audit: {e}");
+                    ExitCode::from(2)
+                }
+            }
+        }
+
+        Commands::Cache { action } => match action {
+            CacheAction::Clear => match triage_cache::clear_cache() {
+                Ok(count) => {
+                    println!("Cleared {count} cached triage results.");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("Error clearing cache: {e}");
+                    ExitCode::from(2)
+                }
+            },
+            CacheAction::Stats => {
+                let (count, size) = triage_cache::cache_stats();
+                println!(
+                    "Triage cache: {count} entries, {:.1}KB",
+                    size as f64 / 1024.0
+                );
+                ExitCode::SUCCESS
+            }
+        },
 
         Commands::Badge { path } => {
             let root = match path.canonicalize() {

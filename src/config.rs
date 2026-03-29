@@ -10,6 +10,7 @@ pub struct Config {
     pub checks: ChecksConfig,
     pub scoring: ScoringConfig,
     pub patterns: PatternsConfig,
+    pub triage: TriageConfig,
 }
 
 /// Configuration for the patterns check
@@ -85,6 +86,34 @@ impl ScoringConfig {
             "hygiene" => self.hygiene,
             "network" => self.network,
             _ => 0,
+        }
+    }
+}
+
+/// Configuration for LLM triage
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct TriageConfig {
+    /// Environment variable name holding the API key
+    pub api_key_env: String,
+    /// Model to use for triage (OpenRouter model ID)
+    pub model: String,
+    /// Maximum findings to triage per scan
+    pub max_findings: usize,
+    /// Timeout per API call in seconds
+    pub timeout_seconds: u64,
+    /// Cache TTL in days
+    pub cache_ttl_days: u32,
+}
+
+impl Default for TriageConfig {
+    fn default() -> Self {
+        Self {
+            api_key_env: "OPENROUTER_API_KEY".into(),
+            model: "anthropic/claude-sonnet-4-6".into(),
+            max_findings: 50,
+            timeout_seconds: 60,
+            cache_ttl_days: 30,
         }
     }
 }
