@@ -1,11 +1,11 @@
 use std::path::Path;
 
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
-use crate::checks::{Finding, Severity};
+use crate::checks::Finding;
 use crate::config::TriageConfig;
 use crate::llm::{ChatMessage, LlmClient, TokenUsage};
+use crate::triage_cache;
 
 const SYSTEM_PROMPT: &str = r#"You are a security analyst triaging static analysis findings from a supply chain security scanner. Your job is to classify each finding as a True Positive (real vulnerability), False Positive (not a real issue), or Needs Investigation (insufficient context to decide).
 
@@ -210,6 +210,20 @@ pub fn triage_findings(
             None => continue,
         };
 
+        // Check cache first
+        if let Some(cached) = triage_cache::get_cached(finding, root, config.cache_ttl_days) {
+            eprintln!(
+                "  Triaging {}/{}: {} {} [cached] {}",
+                idx + 1,
+                limit,
+                ctx.package_name,
+                ctx.rule_id,
+                cached.classification
+            );
+            results.push((idx, cached, TokenUsage::default()));
+            continue;
+        }
+
         eprint!(
             "  Triaging {}/{}: {} {}... ",
             idx + 1,
@@ -236,6 +250,8 @@ pub fn triage_findings(
                     result.classification = Classification::NeedsInvestigation;
                 }
                 eprintln!("{}", result.classification);
+                // Cache the result
+                let _ = triage_cache::set_cached(finding, root, &result);
                 results.push((idx, result, usage));
             }
             Err(e) => {

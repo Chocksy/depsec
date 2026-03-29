@@ -1,4 +1,5 @@
 mod ast;
+mod audit;
 mod baseline;
 mod checks;
 mod config;
@@ -15,8 +16,8 @@ mod scorecard;
 mod scoring;
 mod selfcheck;
 mod shellhook;
-#[allow(unused)] // TODO: remove when triage_cache is wired
 mod triage;
+mod triage_cache;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -159,12 +160,44 @@ enum Commands {
         output: PathBuf,
     },
 
+    /// Deep security audit of a specific package
+    Audit {
+        /// Package name to audit (e.g., shelljs, @scope/pkg)
+        package: String,
+
+        /// Path to the project root
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+
+        /// Preview what would be analyzed without calling LLM
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Maximum budget in USD
+        #[arg(long, default_value = "5.0")]
+        budget: f64,
+    },
+
+    /// Manage triage cache
+    Cache {
+        #[command(subcommand)]
+        action: CacheAction,
+    },
+
     /// Output badge markdown
     Badge {
         /// Path to the project root
         #[arg(default_value = ".")]
         path: PathBuf,
     },
+}
+
+#[derive(Subcommand)]
+enum CacheAction {
+    /// Clear all cached triage results
+    Clear,
+    /// Show cache statistics
+    Stats,
 }
 
 #[derive(Subcommand)]
@@ -528,6 +561,93 @@ fn main() -> ExitCode {
                 }
             }
         }
+
+        Commands::Audit {
+            package,
+            path,
+            dry_run,
+            budget: _budget,
+        } => {
+            let root = match path.canonicalize() {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("Error: invalid path '{}': {e}", path.display());
+                    return ExitCode::from(2);
+                }
+            };
+
+            let config = config::load_config(&root);
+
+            // Locate and profile the package
+            let profile = match audit::locate_package(&package, &root) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    return ExitCode::from(2);
+                }
+            };
+
+            if dry_run {
+                print!(
+                    "{}",
+                    audit::render_audit_results(
+                        &audit::AuditResult {
+                            profile,
+                            findings: vec![],
+                            total_tokens: 0,
+                            rounds: 0,
+                        },
+                        color,
+                    )
+                );
+                return ExitCode::SUCCESS;
+            }
+
+            // Require API key for real audit
+            let client = match llm::LlmClient::from_config(&config.triage) {
+                Some(c) => c,
+                None => {
+                    llm::print_setup_instructions();
+                    return ExitCode::from(2);
+                }
+            };
+
+            match audit::run_audit(&profile, &client, &config.triage, false) {
+                Ok(result) => {
+                    print!("{}", audit::render_audit_results(&result, color));
+                    if result.findings.is_empty() {
+                        ExitCode::SUCCESS
+                    } else {
+                        ExitCode::from(1)
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error during audit: {e}");
+                    ExitCode::from(2)
+                }
+            }
+        }
+
+        Commands::Cache { action } => match action {
+            CacheAction::Clear => match triage_cache::clear_cache() {
+                Ok(count) => {
+                    println!("Cleared {count} cached triage results.");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("Error clearing cache: {e}");
+                    ExitCode::from(2)
+                }
+            },
+            CacheAction::Stats => {
+                let (count, size) = triage_cache::cache_stats();
+                println!(
+                    "Triage cache: {count} entries, {:.1}KB",
+                    size as f64 / 1024.0
+                );
+                ExitCode::SUCCESS
+            }
+        },
 
         Commands::Badge { path } => {
             let root = match path.canonicalize() {
