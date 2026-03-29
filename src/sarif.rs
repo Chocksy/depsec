@@ -115,6 +115,7 @@ mod tests {
             suggestion: Some("Pin to SHA".into()),
             confidence: None,
             package: None,
+            reachable: None,
             auto_fixable: true,
         }];
 

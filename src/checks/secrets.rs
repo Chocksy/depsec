@@ -200,6 +200,7 @@ impl Check for SecretsCheck {
                             )),
                             confidence: None,
                             package: None,
+                            reachable: None,
                             auto_fixable: false,
                         });
                     }

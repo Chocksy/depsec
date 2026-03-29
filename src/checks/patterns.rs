@@ -270,6 +270,7 @@ impl Check for PatternsCheck {
                             line: Some(af.line),
                             suggestion: Some(suggestion.into()),
                             package: pkg.clone(),
+                            reachable: None,
                             auto_fixable: false,
                         });
                     }
@@ -302,6 +303,7 @@ impl Check for PatternsCheck {
                                 line: Some(line_num + 1),
                                 suggestion: Some(rule.suggestion.into()),
                                 package: extract_package_name(&rel_path),
+                                reachable: None,
                                 auto_fixable: false,
                             });
                         }
@@ -477,6 +479,7 @@ fn check_entropy(content: &str, file: &str, findings: &mut Vec<Finding>) {
                         line: Some(line_num + 1),
                         suggestion: Some("Check if the string is a known data table or if it decodes to executable code".into()),
                         package: extract_package_name(file),
+                        reachable: None,
                         auto_fixable: false,
                     });
                     break; // One finding per line is enough
@@ -556,6 +559,7 @@ fn check_pth_files(root: &Path, findings: &mut Vec<Finding>) {
                             "Remove immediately — .pth files with executable code are almost always malicious".into(),
                         ),
                         package: None,
+                        reachable: None,
                         auto_fixable: false,
                     });
                     break; // One finding per file is enough
@@ -629,6 +633,7 @@ fn check_install_scripts(root: &Path, findings: &mut Vec<Finding>) {
                         "Review the '{hook}' script — install scripts are a common attack vector"
                     )),
                     package: None,
+                    reachable: None,
                     auto_fixable: false,
                 });
             }

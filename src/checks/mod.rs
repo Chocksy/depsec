@@ -62,6 +62,9 @@ pub struct Finding {
     pub suggestion: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub package: Option<String>,
+    /// Whether this finding's package is imported by the app at runtime
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reachable: Option<bool>,
     pub auto_fixable: bool,
 }
 

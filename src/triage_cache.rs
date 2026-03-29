@@ -161,6 +161,7 @@ mod tests {
             line: Some(10),
             suggestion: None,
             package: Some("test-pkg".into()),
+            reachable: None,
             auto_fixable: false,
         }
     }

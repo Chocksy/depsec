@@ -9,6 +9,7 @@ mod monitor;
 mod output;
 mod parsers;
 mod preflight;
+mod reachability;
 mod rules;
 mod sarif;
 mod scanner;
@@ -269,7 +270,17 @@ fn main() -> ExitCode {
             let filter = checks.as_deref();
 
             match scanner::run_scan(&root, &config, filter) {
-                Ok(report) => {
+                Ok(mut report) => {
+                    // Tag pattern findings with reachability
+                    let app_imports = reachability::scan_app_imports(&root);
+                    for result in &mut report.results {
+                        for finding in &mut result.findings {
+                            if let Some(pkg) = &finding.package {
+                                finding.reachable = Some(app_imports.packages.contains(pkg));
+                            }
+                        }
+                    }
+
                     let fmt = format
                         .as_deref()
                         .unwrap_or(if json { "json" } else { "human" });

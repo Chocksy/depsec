@@ -94,6 +94,7 @@ fn check_lockfile_committed(ctx: &ScanContext, lockfiles: &[String], findings: &
                     suggestion: Some("Remove lockfile from .gitignore and commit it".into()),
                     confidence: None,
                     package: None,
+                    reachable: None,
                     auto_fixable: false,
                 });
             }
@@ -204,6 +205,7 @@ fn query_osv_batch(packages: &[Package]) -> anyhow::Result<Vec<Finding>> {
                             suggestion: Some(suggestion),
                             confidence: None,
                             package: None,
+                            reachable: None,
                             auto_fixable: false,
                         });
                     }

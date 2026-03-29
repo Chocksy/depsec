@@ -51,6 +51,7 @@ fn check_security_md(ctx: &ScanContext, findings: &mut Vec<Finding>, pass: &mut 
             ),
             confidence: None,
             package: None,
+            reachable: None,
             auto_fixable: false,
         });
     }
@@ -69,6 +70,7 @@ fn check_gitignore(ctx: &ScanContext, findings: &mut Vec<Finding>, pass: &mut Ve
             suggestion: Some("Create a .gitignore covering sensitive files".into()),
             confidence: None,
             package: None,
+            reachable: None,
             auto_fixable: false,
         });
         return;
@@ -107,6 +109,7 @@ fn check_gitignore(ctx: &ScanContext, findings: &mut Vec<Finding>, pass: &mut Ve
             )),
             confidence: None,
             package: None,
+            reachable: None,
             auto_fixable: false,
         });
     }
@@ -161,6 +164,7 @@ fn check_lockfile_committed(
                         )),
                         confidence: None,
                         package: None,
+                        reachable: None,
                         auto_fixable: false,
                     });
                 }
@@ -227,6 +231,7 @@ fn check_branch_protection(ctx: &ScanContext, findings: &mut Vec<Finding>, pass:
                 )),
                 confidence: None,
                 package: None,
+                reachable: None,
                 auto_fixable: false,
             });
         }

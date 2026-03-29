@@ -191,6 +191,7 @@ mod tests {
             suggestion: None,
             confidence: None,
             package: None,
+            reachable: None,
             auto_fixable: false,
         }];
         let results = vec![

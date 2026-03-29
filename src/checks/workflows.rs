@@ -137,6 +137,7 @@ fn check_action_pinning(content: &str, file: &str, findings: &mut Vec<Finding>) 
                 suggestion: Some("Pin to a full commit SHA instead of a tag".into()),
                 confidence: None,
                 package: None,
+                reachable: None,
                 auto_fixable: true,
             });
         }
@@ -173,6 +174,7 @@ fn check_permissions(content: &str, file: &str, findings: &mut Vec<Finding>) {
             ),
             confidence: None,
             package: None,
+            reachable: None,
             auto_fixable: false,
         });
     } else if is_write_all {
@@ -185,6 +187,7 @@ fn check_permissions(content: &str, file: &str, findings: &mut Vec<Finding>) {
             suggestion: Some("Set minimal permissions per job instead of write-all".into()),
             confidence: None,
             package: None,
+            reachable: None,
             auto_fixable: false,
         });
     }
@@ -215,7 +218,7 @@ fn check_pull_request_target(content: &str, file: &str, findings: &mut Vec<Findi
                     "Use pull_request instead, or avoid checking out PR code in pull_request_target"
                         .into(),
                 ),
-                confidence: None, package: None,
+                confidence: None, package: None, reachable: None,
                 auto_fixable: false,
             });
         }
@@ -278,6 +281,7 @@ fn check_line_for_injection(line: &str, line_num: usize, file: &str, findings: &
                 ),
                 confidence: None,
                 package: None,
+                reachable: None,
                 auto_fixable: false,
             });
         }
@@ -300,6 +304,7 @@ fn check_dangerous_git_flags(content: &str, file: &str, findings: &mut Vec<Findi
                 suggestion: Some("Remove --no-verify to ensure hooks run".into()),
                 confidence: None,
                 package: None,
+                reachable: None,
                 auto_fixable: false,
             });
         }
@@ -314,6 +319,7 @@ fn check_dangerous_git_flags(content: &str, file: &str, findings: &mut Vec<Findi
                 suggestion: Some("Use --force-with-lease instead of --force".into()),
                 confidence: None,
                 package: None,
+                reachable: None,
                 auto_fixable: false,
             });
         }
