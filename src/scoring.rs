@@ -66,7 +66,15 @@ pub fn compute_category_score(max_points: f64, findings: &[crate::checks::Findin
 
     let total_deduction: f64 = findings
         .iter()
-        .map(|f| base_deduction * f.severity.deduction_multiplier())
+        .map(|f| {
+            let severity_mult = f.severity.deduction_multiplier();
+            // Build-only findings have reduced impact on score
+            let reachability_mult = match f.reachable {
+                Some(false) => 0.3, // Build-only: significantly reduced impact
+                _ => 1.0,           // Runtime or unknown: standard impact
+            };
+            base_deduction * severity_mult * reachability_mult
+        })
         .sum();
 
     (max_points - total_deduction).max(0.0)

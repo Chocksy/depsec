@@ -139,6 +139,12 @@ pub fn render_human(
             ));
         }
 
+        // Special collapsed rendering for deps category
+        if result.category == "deps" && !result.findings.is_empty() && !verbose {
+            render_deps_summary(&mut out, &result.findings, use_color, dim, reset);
+            continue;
+        }
+
         let mut hidden_count = 0usize;
 
         // Separate visible from hidden findings
@@ -159,96 +165,80 @@ pub fn render_human(
         let has_packages = visible.iter().any(|f| f.package.is_some());
 
         if !verbose && has_packages {
-            // Aggregate mode: group by package
-            let mut by_package: BTreeMap<String, Vec<&Finding>> = BTreeMap::new();
+            // Aggregate mode: group by package, split by reachability
+            let mut runtime_pkgs: BTreeMap<String, Vec<&Finding>> = BTreeMap::new();
+            let mut build_pkgs: BTreeMap<String, Vec<&Finding>> = BTreeMap::new();
             let mut no_package: Vec<&Finding> = Vec::new();
 
             for f in &visible {
                 match &f.package {
-                    Some(pkg) => by_package.entry(pkg.clone()).or_default().push(f),
+                    Some(pkg) => {
+                        if f.reachable == Some(true) {
+                            runtime_pkgs.entry(pkg.clone()).or_default().push(f);
+                        } else {
+                            build_pkgs.entry(pkg.clone()).or_default().push(f);
+                        }
+                    }
                     None => no_package.push(f),
                 }
             }
 
-            // Render non-packaged findings individually (workflows, hygiene, etc.)
+            // Render non-packaged findings individually
             for finding in &no_package {
                 render_finding(&mut out, finding, use_color);
             }
 
-            // Render packaged findings aggregated
-            for (pkg, findings) in &by_package {
-                let count = findings.len();
-                let max_severity = findings
-                    .iter()
-                    .map(|f| f.severity)
-                    .max()
-                    .unwrap_or(Severity::Low);
-                let max_confidence = findings
-                    .iter()
-                    .filter_map(|f| f.confidence)
-                    .max()
-                    .unwrap_or(Confidence::Low);
+            let red = if use_color { "\x1b[31m" } else { "" };
+            let green = if use_color { "\x1b[32m" } else { "" };
 
-                let icon = match max_severity {
-                    Severity::Critical | Severity::High => {
-                        if use_color {
-                            "\x1b[31m✗\x1b[0m"
-                        } else {
-                            "✗"
-                        }
-                    }
-                    _ => {
-                        if use_color {
-                            "\x1b[33m⚠\x1b[0m"
-                        } else {
-                            "⚠"
-                        }
-                    }
-                };
-
-                // Collect unique rule labels (e.g., "P001: Shell Execution")
-                let mut rules: Vec<String> = findings
-                    .iter()
-                    .map(|f| f.rule_id.as_str())
-                    .collect::<HashSet<_>>()
-                    .into_iter()
-                    .map(rule_label)
-                    .collect();
-                rules.sort();
-
-                let conf_label = format!("{max_confidence:?}").to_lowercase();
+            // Runtime findings — prominent
+            if !runtime_pkgs.is_empty() {
+                let runtime_count: usize = runtime_pkgs.values().map(|v| v.len()).sum();
                 out.push_str(&format!(
-                    "  {icon} {pkg} — {count} finding{s} ({rules}, confidence: {conf_label})\n",
-                    s = if count == 1 { "" } else { "s" },
-                    rules = rules.join(", "),
+                    "\n  {red}ACTION REQUIRED{reset} — {count} finding{s} in {pkg_count} package{ps} your app imports:\n\n",
+                    count = runtime_count,
+                    s = if runtime_count == 1 { "" } else { "s" },
+                    pkg_count = runtime_pkgs.len(),
+                    ps = if runtime_pkgs.len() == 1 { "" } else { "s" },
                 ));
 
-                // Show top 3 locations
-                let top_locations: Vec<String> = findings
-                    .iter()
-                    .take(3)
-                    .filter_map(|f| {
-                        f.file.as_ref().map(|file| match f.line {
-                            Some(l) => format!("{file}:{l}"),
-                            None => file.clone(),
-                        })
-                    })
-                    .collect();
-                if !top_locations.is_empty() {
-                    let more = if count > 3 {
-                        format!(" +{} more", count - 3)
-                    } else {
-                        String::new()
-                    };
-                    out.push_str(&format!(
-                        "    {dim}Top: {}{more}{reset}\n",
-                        top_locations.join(", "),
-                    ));
+                for (pkg, findings) in &runtime_pkgs {
+                    render_package_aggregate(&mut out, pkg, findings, use_color, dim, reset);
                 }
+            }
 
-                if let Some(suggestion) = &findings[0].suggestion {
-                    out.push_str(&format!("    → {suggestion}\n"));
-                }
+            // Build-only findings — collapsed
+            if !build_pkgs.is_empty() {
+                let build_count: usize = build_pkgs.values().map(|v| v.len()).sum();
+                let pkg_names: Vec<&str> = build_pkgs.keys().map(|s| s.as_str()).collect();
+
+                out.push_str(&format!(
+                    "\n  {green}BUILD TOOLS{reset} — {count} finding{s} in {pkg_count} package{ps} not imported by your app:\n",
+                    count = build_count,
+                    s = if build_count == 1 { "" } else { "s" },
+                    pkg_count = build_pkgs.len(),
+                    ps = if build_pkgs.len() == 1 { "" } else { "s" },
+                ));
+
+                // Show just package names, collapsed
+                let display_names: Vec<&str> = pkg_names.iter().take(8).copied().collect();
+                let more = if pkg_names.len() > 8 {
+                    format!(", +{} more", pkg_names.len() - 8)
+                } else {
+                    String::new()
+                };
+                out.push_str(&format!(
+                    "    {dim}{}{more}{reset}\n",
+                    display_names.join(", "),
+                ));
+                out.push_str(&format!(
+                    "    {dim}These run during build/dev only, not in production (use --verbose for details){reset}\n",
+                ));
+            }
+
+            // If neither runtime nor build had findings, show pass
+            if runtime_pkgs.is_empty() && build_pkgs.is_empty() && no_package.is_empty() {
+                out.push_str(&format!("  {green}✓{reset} No suspicious patterns found\n",));
             }
         } else {
             // Verbose mode or no packages: render individually
@@ -367,6 +357,163 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
 
 pub fn render_json(report: &ScanReport) -> anyhow::Result<String> {
     Ok(serde_json::to_string_pretty(report)?)
+}
+
+fn render_deps_summary(
+    out: &mut String,
+    findings: &[Finding],
+    use_color: bool,
+    dim: &str,
+    reset: &str,
+) {
+    let total = findings.len();
+    let critical = findings
+        .iter()
+        .filter(|f| f.severity == Severity::Critical)
+        .count();
+    let high = findings
+        .iter()
+        .filter(|f| f.severity == Severity::High)
+        .count();
+    let medium = findings
+        .iter()
+        .filter(|f| f.severity == Severity::Medium)
+        .count();
+    let low = findings
+        .iter()
+        .filter(|f| f.severity == Severity::Low)
+        .count();
+
+    // Count unique packages from finding messages (extract package name from CVE messages)
+    let malware = findings
+        .iter()
+        .filter(|f| f.rule_id.starts_with("DEPSEC-MAL"))
+        .count();
+    let cves = total - malware;
+
+    let icon = if critical > 0 || malware > 0 || high > 0 {
+        if use_color {
+            "\x1b[31m✗\x1b[0m"
+        } else {
+            "✗"
+        }
+    } else if use_color {
+        "\x1b[33m⚠\x1b[0m"
+    } else {
+        "⚠"
+    };
+
+    out.push_str(&format!(
+        "  {icon} {cves} known vulnerabilit{ies}\n",
+        ies = if cves == 1 { "y" } else { "ies" },
+    ));
+
+    if malware > 0 {
+        let red = if use_color { "\x1b[31m" } else { "" };
+        out.push_str(&format!(
+            "    {red}MALWARE: {malware} malicious package{s} — REMOVE IMMEDIATELY{reset}\n",
+            s = if malware == 1 { "" } else { "s" },
+        ));
+    }
+
+    // Severity breakdown
+    let mut parts = Vec::new();
+    if critical > 0 {
+        parts.push(format!("{critical} critical"));
+    }
+    if high > 0 {
+        parts.push(format!("{high} high"));
+    }
+    if medium > 0 {
+        parts.push(format!("{medium} medium"));
+    }
+    if low > 0 {
+        parts.push(format!("{low} low"));
+    }
+    out.push_str(&format!("    {dim}Severity: {}{reset}\n", parts.join(", ")));
+
+    // Suggestion
+    out.push_str(&format!(
+        "    → Run {dim}npm audit fix{reset} or {dim}cargo audit{reset} to resolve\n"
+    ));
+    out.push_str(&format!(
+        "    {dim}Use --verbose for full advisory list{reset}\n"
+    ));
+}
+
+fn render_package_aggregate(
+    out: &mut String,
+    pkg: &str,
+    findings: &[&Finding],
+    use_color: bool,
+    dim: &str,
+    reset: &str,
+) {
+    let count = findings.len();
+    let max_severity = findings
+        .iter()
+        .map(|f| f.severity)
+        .max()
+        .unwrap_or(Severity::Low);
+
+    let icon = match max_severity {
+        Severity::Critical | Severity::High => {
+            if use_color {
+                "\x1b[31m✗\x1b[0m"
+            } else {
+                "✗"
+            }
+        }
+        _ => {
+            if use_color {
+                "\x1b[33m⚠\x1b[0m"
+            } else {
+                "⚠"
+            }
+        }
+    };
+
+    let mut rules: Vec<String> = findings
+        .iter()
+        .map(|f| f.rule_id.as_str())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .map(rule_label)
+        .collect();
+    rules.sort();
+
+    out.push_str(&format!(
+        "  {icon} {pkg} — {count} finding{s} ({rules})\n",
+        s = if count == 1 { "" } else { "s" },
+        rules = rules.join(", "),
+    ));
+
+    // Show top 3 locations
+    let top_locations: Vec<String> = findings
+        .iter()
+        .take(3)
+        .filter_map(|f| {
+            f.file.as_ref().map(|file| match f.line {
+                Some(l) => format!("{file}:{l}"),
+                None => file.clone(),
+            })
+        })
+        .collect();
+    if !top_locations.is_empty() {
+        let more = if count > 3 {
+            format!(" +{} more", count - 3)
+        } else {
+            String::new()
+        };
+        out.push_str(&format!(
+            "    {dim}Top: {}{more}{reset}\n",
+            top_locations.join(", "),
+        ));
+    }
+
+    if let Some(suggestion) = &findings[0].suggestion {
+        out.push_str(&format!("    → {suggestion}\n"));
+    }
 }
 
 fn render_finding(out: &mut String, finding: &Finding, use_color: bool) {
