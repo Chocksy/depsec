@@ -4,6 +4,7 @@ mod baseline;
 mod checks;
 mod config;
 mod fixer;
+mod install_guard;
 mod llm;
 mod monitor;
 mod output;
@@ -160,6 +161,17 @@ enum Commands {
         /// Output file (default: depsec-scorecard.svg)
         #[arg(short, long, default_value = "depsec-scorecard.svg")]
         output: PathBuf,
+    },
+
+    /// Protected package install — preflight + monitor + report
+    InstallGuard {
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+
+        /// Command and arguments to run (e.g., npm install lodash)
+        #[arg(trailing_var_arg = true, required = true)]
+        command: Vec<String>,
     },
 
     /// Deep security audit of a specific package
@@ -565,6 +577,25 @@ fn main() -> ExitCode {
                             eprintln!("Error writing scorecard: {e}");
                             ExitCode::from(2)
                         }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    ExitCode::from(2)
+                }
+            }
+        }
+
+        Commands::InstallGuard { json, command } => {
+            let root = std::env::current_dir().unwrap_or_else(|_| ".".into());
+            let config = config::load_config(&root);
+
+            match install_guard::run_install_guard(&command, &root, &config.install, json) {
+                Ok(result) => {
+                    if result.has_issues {
+                        ExitCode::from(1)
+                    } else {
+                        ExitCode::from(result.exit_code as u8)
                     }
                 }
                 Err(e) => {

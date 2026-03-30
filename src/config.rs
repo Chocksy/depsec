@@ -11,6 +11,7 @@ pub struct Config {
     pub scoring: ScoringConfig,
     pub patterns: PatternsConfig,
     pub triage: TriageConfig,
+    pub install: InstallConfig,
 }
 
 /// Configuration for the patterns check
@@ -114,6 +115,34 @@ impl Default for TriageConfig {
             max_findings: 50,
             timeout_seconds: 60,
             cache_ttl_days: 30,
+        }
+    }
+}
+
+/// Configuration for install-guard behavior
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct InstallConfig {
+    /// Mode: monitor (default), sandbox, report-only, none
+    pub mode: String,
+    /// Run preflight typosquatting check before install
+    pub preflight: bool,
+    /// Generate attestation after install
+    pub attestation: bool,
+    /// Sandbox technology: auto, bubblewrap, docker, none
+    pub sandbox: String,
+    /// Additional sensitive paths to watch
+    pub watch_paths: Vec<String>,
+}
+
+impl Default for InstallConfig {
+    fn default() -> Self {
+        Self {
+            mode: "monitor".into(),
+            preflight: true,
+            attestation: false,
+            sandbox: "none".into(),
+            watch_paths: vec![],
         }
     }
 }
