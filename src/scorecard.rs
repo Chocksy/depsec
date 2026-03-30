@@ -156,11 +156,7 @@ pub fn generate_svg(report: &ScanReport) -> String {
 }
 
 fn capitalize(s: &str) -> String {
-    let mut c = s.chars();
-    match c.next() {
-        None => String::new(),
-        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-    }
+    crate::utils::capitalize(s)
 }
 
 #[cfg(test)]

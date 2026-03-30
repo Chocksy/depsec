@@ -490,19 +490,7 @@ fn check_entropy(content: &str, file: &str, findings: &mut Vec<Finding>) {
 }
 
 fn shannon_entropy(s: &str) -> f64 {
-    let mut freq = [0u32; 256];
-    for &b in s.as_bytes() {
-        freq[b as usize] += 1;
-    }
-
-    let len = s.len() as f64;
-    freq.iter()
-        .filter(|&&count| count > 0)
-        .map(|&count| {
-            let p = count as f64 / len;
-            -p * p.log2()
-        })
-        .sum()
+    crate::utils::shannon_entropy(s)
 }
 
 /// DEPSEC-P009: Scan Python site-packages for .pth files with executable code

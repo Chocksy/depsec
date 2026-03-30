@@ -562,11 +562,7 @@ fn format_grade(grade: &Grade, use_color: bool) -> String {
 }
 
 fn capitalize(s: &str) -> String {
-    let mut c = s.chars();
-    match c.next() {
-        None => String::new(),
-        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-    }
+    crate::utils::capitalize(s)
 }
 
 fn render_ascii_scorecard(report: &ScanReport, use_color: bool) -> String {

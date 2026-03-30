@@ -296,23 +296,8 @@ fn check_secret_candidate(
     }
 }
 
-/// Shannon entropy of a string (bits per character)
 fn shannon_entropy(s: &str) -> f64 {
-    if s.is_empty() {
-        return 0.0;
-    }
-    let mut freq = [0u32; 256];
-    for &b in s.as_bytes() {
-        freq[b as usize] += 1;
-    }
-    let len = s.len() as f64;
-    freq.iter()
-        .filter(|&&count| count > 0)
-        .map(|&count| {
-            let p = count as f64 / len;
-            -p * p.log2()
-        })
-        .sum()
+    crate::utils::shannon_entropy(s)
 }
 
 /// Check if a string is sequential/repetitive (not a secret)

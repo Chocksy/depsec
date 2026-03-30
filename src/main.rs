@@ -27,6 +27,7 @@ mod selfcheck;
 mod shellhook;
 mod triage;
 mod triage_cache;
+mod utils;
 mod watchdog;
 
 use std::path::PathBuf;

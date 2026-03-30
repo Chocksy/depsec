@@ -297,7 +297,9 @@ fn extract_script_block(content: &str) -> Option<String> {
     }
 }
 
-/// Read devDependencies from package.json
+/// Read devDependencies from package.json.
+/// Scaffolded — planned for distinguishing dev vs prod deps in reachability.
+#[allow(dead_code)]
 fn read_dev_dependencies(root: &Path) -> HashSet<String> {
     let pkg_json = root.join("package.json");
     let mut dev_deps = HashSet::new();
