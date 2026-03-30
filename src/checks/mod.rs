@@ -68,6 +68,61 @@ pub struct Finding {
     pub auto_fixable: bool,
 }
 
+impl Finding {
+    /// Create a new Finding with required fields. Optional fields default to None/false.
+    pub fn new(rule_id: impl Into<String>, severity: Severity, message: impl Into<String>) -> Self {
+        Self {
+            rule_id: rule_id.into(),
+            severity,
+            confidence: None,
+            message: message.into(),
+            file: None,
+            line: None,
+            suggestion: None,
+            package: None,
+            reachable: None,
+            auto_fixable: false,
+        }
+    }
+
+    pub fn with_file(mut self, file: impl Into<String>, line: usize) -> Self {
+        self.file = Some(file.into());
+        self.line = Some(line);
+        self
+    }
+
+    pub fn with_file_only(mut self, file: impl Into<String>) -> Self {
+        self.file = Some(file.into());
+        self
+    }
+
+    pub fn with_confidence(mut self, confidence: Confidence) -> Self {
+        self.confidence = Some(confidence);
+        self
+    }
+
+    pub fn with_suggestion(mut self, suggestion: impl Into<String>) -> Self {
+        self.suggestion = Some(suggestion.into());
+        self
+    }
+
+    pub fn with_package(mut self, package: Option<String>) -> Self {
+        self.package = package;
+        self
+    }
+
+    #[cfg(test)]
+    pub fn with_package_name(mut self, package: impl Into<String>) -> Self {
+        self.package = Some(package.into());
+        self
+    }
+
+    pub fn auto_fixable(mut self) -> Self {
+        self.auto_fixable = true;
+        self
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct CheckResult {
     pub category: String,

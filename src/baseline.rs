@@ -29,13 +29,30 @@ impl Default for Baseline {
 }
 
 fn chrono_date() -> String {
-    // Simple date without chrono dependency
-    let output = std::process::Command::new("date").arg("+%Y-%m-%d").output();
+    // Pure Rust — no subprocess needed
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let days = secs / 86400;
+    // Calculate year/month/day from Unix epoch days
+    let (y, m, d) = days_to_ymd(days as i64);
+    format!("{y:04}-{m:02}-{d:02}")
+}
 
-    match output {
-        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim().to_string(),
-        _ => "unknown".to_string(),
-    }
+fn days_to_ymd(mut days: i64) -> (i64, i64, i64) {
+    // Civil days from epoch algorithm (Howard Hinnant)
+    days += 719468;
+    let era = if days >= 0 { days } else { days - 146096 } / 146097;
+    let doe = days - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
 }
 
 /// Initialize a baseline file with common hosts pre-populated based on detected ecosystem.

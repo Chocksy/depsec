@@ -77,3 +77,15 @@ pub fn run_self_check(root: &Path) {
     println!("  ✗ Reproducible build: not yet implemented");
     println!("  ✗ SLSA attestation: not yet implemented");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_run_self_check_empty_dir() {
+        // Should not panic on an empty directory (no Cargo.lock, no deny.toml, no CI)
+        let dir = tempfile::TempDir::new().unwrap();
+        run_self_check(dir.path());
+    }
+}

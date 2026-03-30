@@ -178,18 +178,7 @@ mod tests {
     fn test_generate_svg_with_results() {
         use crate::checks::{CheckResult, Finding, Severity};
 
-        let findings = vec![Finding {
-            rule_id: "TEST-001".into(),
-            severity: Severity::High,
-            message: "test".into(),
-            file: None,
-            line: None,
-            suggestion: None,
-            confidence: None,
-            package: None,
-            reachable: None,
-            auto_fixable: false,
-        }];
+        let findings = vec![Finding::new("TEST-001", Severity::High, "test")];
         let results = vec![
             CheckResult::new("workflows", vec![], 25.0, vec![]),
             CheckResult::new("deps", findings, 20.0, vec![]),

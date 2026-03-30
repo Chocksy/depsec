@@ -243,56 +243,36 @@ fn check_secret_candidate(
     if has_suspicious_name && entropy >= 3.5 && len >= 16 {
         // HIGH: suspicious name + high entropy + long value
         let masked = mask_value(value);
-        findings.push(Finding {
-            rule_id: "DEPSEC-S021".into(),
-            severity: Severity::Critical,
-            confidence: Some(crate::checks::Confidence::High),
-            message: format!(
+        findings.push(
+            Finding::new("DEPSEC-S021", Severity::Critical, format!(
                 "{name} assigned high-entropy secret ({:.1} bits/char, {len} chars): \"{masked}\"",
                 entropy
-            ),
-            file: Some(file_path.into()),
-            line: Some(line),
-            suggestion: Some(format!(
-                "Move to environment variable: std::env::var(\"{name}\") or process.env.{name}"
-            )),
-            package: None,
-            reachable: None,
-            auto_fixable: false,
-        });
+            ))
+                .with_file(file_path, line)
+                .with_confidence(crate::checks::Confidence::High)
+                .with_suggestion(format!("Move to environment variable: std::env::var(\"{name}\") or process.env.{name}")),
+        );
     } else if has_suspicious_name && len >= 8 {
         // MEDIUM: suspicious name + any value (even low entropy)
         let masked = mask_value(value);
-        findings.push(Finding {
-            rule_id: "DEPSEC-S022".into(),
-            severity: Severity::High,
-            confidence: Some(crate::checks::Confidence::Medium),
-            message: format!("{name} assigned potential secret ({len} chars): \"{masked}\""),
-            file: Some(file_path.into()),
-            line: Some(line),
-            suggestion: Some("Move to environment variable or config file".into()),
-            package: None,
-            reachable: None,
-            auto_fixable: false,
-        });
+        findings.push(
+            Finding::new("DEPSEC-S022", Severity::High, format!("{name} assigned potential secret ({len} chars): \"{masked}\""))
+                .with_file(file_path, line)
+                .with_confidence(crate::checks::Confidence::Medium)
+                .with_suggestion("Move to environment variable or config file"),
+        );
     } else if entropy >= 4.5 && len >= 30 {
         // LOW: high entropy + long value, no name signal
         let masked = mask_value(value);
-        findings.push(Finding {
-            rule_id: "DEPSEC-S023".into(),
-            severity: Severity::Medium,
-            confidence: Some(crate::checks::Confidence::Low),
-            message: format!(
+        findings.push(
+            Finding::new("DEPSEC-S023", Severity::Medium, format!(
                 "{name} assigned high-entropy string ({:.1} bits/char, {len} chars): \"{masked}\"",
                 entropy
-            ),
-            file: Some(file_path.into()),
-            line: Some(line),
-            suggestion: Some("Review — may be a hardcoded secret, hash, or encoded data".into()),
-            package: None,
-            reachable: None,
-            auto_fixable: false,
-        });
+            ))
+                .with_file(file_path, line)
+                .with_confidence(crate::checks::Confidence::Low)
+                .with_suggestion("Review — may be a hardcoded secret, hash, or encoded data"),
+        );
     }
 }
 

@@ -102,3 +102,82 @@ pub fn deduplicate(packages: Vec<Package>) -> Vec<Package> {
         .filter(|p| seen.insert((p.name.clone(), p.version.clone(), p.ecosystem.clone())))
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ecosystem_osv_name() {
+        assert_eq!(Ecosystem::CratesIo.osv_name(), "crates.io");
+        assert_eq!(Ecosystem::Npm.osv_name(), "npm");
+        assert_eq!(Ecosystem::RubyGems.osv_name(), "RubyGems");
+        assert_eq!(Ecosystem::Go.osv_name(), "Go");
+        assert_eq!(Ecosystem::PyPI.osv_name(), "PyPI");
+    }
+
+    #[test]
+    fn test_deduplicate_empty() {
+        let result = deduplicate(vec![]);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_deduplicate_removes_dupes() {
+        let packages = vec![
+            Package { name: "serde".into(), version: "1.0".into(), ecosystem: Ecosystem::CratesIo },
+            Package { name: "serde".into(), version: "1.0".into(), ecosystem: Ecosystem::CratesIo },
+            Package { name: "tokio".into(), version: "1.0".into(), ecosystem: Ecosystem::CratesIo },
+        ];
+        let result = deduplicate(packages);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_deduplicate_keeps_different_versions() {
+        let packages = vec![
+            Package { name: "serde".into(), version: "1.0".into(), ecosystem: Ecosystem::CratesIo },
+            Package { name: "serde".into(), version: "2.0".into(), ecosystem: Ecosystem::CratesIo },
+        ];
+        let result = deduplicate(packages);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_all_lockfiles_empty_dir() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let results = parse_all_lockfiles(dir.path(), 3);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_parse_all_lockfiles_with_cargo_lock() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cargo_lock = r#"
+[[package]]
+name = "anyhow"
+version = "1.0.75"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "serde"
+version = "1.0.188"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+"#;
+        std::fs::write(dir.path().join("Cargo.lock"), cargo_lock).unwrap();
+        let results = parse_all_lockfiles(dir.path(), 3);
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, "Cargo.lock");
+        assert_eq!(results[0].1.len(), 2);
+    }
+
+    #[test]
+    fn test_parse_all_lockfiles_skips_hidden() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let hidden = dir.path().join(".hidden");
+        std::fs::create_dir_all(&hidden).unwrap();
+        std::fs::write(hidden.join("Cargo.lock"), "[[package]]\nname = \"x\"\nversion = \"1\"").unwrap();
+        let results = parse_all_lockfiles(dir.path(), 3);
+        assert!(results.is_empty());
+    }
+}

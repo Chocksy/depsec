@@ -523,3 +523,75 @@ fn print_monitor_result(result: &MonitorResult) {
         println!("{total} connections monitored, all expected. No file access issues.");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_conn(host: &str, process: &str) -> Connection {
+        Connection {
+            remote_host: host.into(),
+            remote_port: 443,
+            pid: 1,
+            process_name: process.into(),
+            cmdline: String::new(),
+        }
+    }
+
+    #[test]
+    fn test_default_expected_hosts() {
+        let hosts = default_expected_hosts();
+        assert!(hosts.contains_key("npm"));
+        assert!(hosts.contains_key("pip"));
+        assert!(hosts.contains_key("cargo"));
+        assert!(hosts["npm"].contains(&"registry.npmjs.org"));
+    }
+
+    #[test]
+    fn test_is_expected_universal() {
+        let defaults = default_expected_hosts();
+        let allowed = HashSet::new();
+        let conn = make_conn("github.com", "git");
+        assert!(is_expected_connection(&conn, &defaults, &allowed));
+    }
+
+    #[test]
+    fn test_is_expected_process_specific() {
+        let defaults = default_expected_hosts();
+        let allowed = HashSet::new();
+        let conn = make_conn("registry.npmjs.org", "npm");
+        assert!(is_expected_connection(&conn, &defaults, &allowed));
+    }
+
+    #[test]
+    fn test_is_expected_user_allowed() {
+        let defaults = default_expected_hosts();
+        let mut allowed = HashSet::new();
+        allowed.insert("custom.registry.com".into());
+        let conn = make_conn("custom.registry.com", "unknown");
+        assert!(is_expected_connection(&conn, &defaults, &allowed));
+    }
+
+    #[test]
+    fn test_is_unexpected_connection() {
+        let defaults = default_expected_hosts();
+        let allowed = HashSet::new();
+        let conn = make_conn("evil-server.com", "node");
+        assert!(!is_expected_connection(&conn, &defaults, &allowed));
+    }
+
+    #[test]
+    fn test_always_block_contains_imds() {
+        assert!(ALWAYS_BLOCK.contains(&"169.254.169.254"));
+        assert!(ALWAYS_BLOCK.contains(&"169.254.170.2"));
+    }
+
+    #[test]
+    fn test_is_expected_process_path_strip() {
+        // Process name with full path should still match
+        let defaults = default_expected_hosts();
+        let allowed = HashSet::new();
+        let conn = make_conn("registry.npmjs.org", "/usr/local/bin/npm");
+        assert!(is_expected_connection(&conn, &defaults, &allowed));
+    }
+}

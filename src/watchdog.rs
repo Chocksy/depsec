@@ -429,4 +429,72 @@ mod tests {
         let pids = get_process_tree(std::process::id());
         assert!(pids.contains(&std::process::id()));
     }
+
+    #[test]
+    fn test_get_process_tree_pub() {
+        let pids = get_process_tree_pub(std::process::id());
+        assert!(pids.contains(&std::process::id()));
+    }
+
+    #[test]
+    fn test_check_process_files_no_alerts() {
+        let paths = build_sensitive_paths(&[]);
+        let mut seen = HashSet::new();
+        // Our test process shouldn't have sensitive files open
+        let alerts = check_process_files(std::process::id(), &paths, &mut seen);
+        // May or may not have alerts depending on env, but should not panic
+        let _ = alerts;
+    }
+
+    #[test]
+    fn test_check_write_boundaries() {
+        let allowed = vec![PathBuf::from("/tmp"), PathBuf::from("/dev")];
+        let mut seen = HashSet::new();
+        let violations = check_write_boundaries(std::process::id(), &allowed, &mut seen);
+        // Should not panic
+        let _ = violations;
+    }
+
+    #[test]
+    fn test_build_sensitive_paths_absolute() {
+        let extra = vec!["/opt/secrets".into()];
+        let paths = build_sensitive_paths(&extra);
+        assert!(paths.iter().any(|p| p.to_string_lossy() == "/opt/secrets"));
+    }
+
+    #[test]
+    fn test_is_sensitive_path_exact_match() {
+        let home = std::env::var("HOME").unwrap();
+        let paths = build_sensitive_paths(&[]);
+        // Exact path match (not just prefix)
+        assert!(is_sensitive_path(&format!("{home}/.env"), &paths));
+    }
+
+    #[test]
+    fn test_parse_lsof_output_empty() {
+        assert!(parse_lsof_output("").is_empty());
+    }
+
+    #[test]
+    fn test_parse_lsof_output_writable_empty() {
+        assert!(parse_lsof_output_writable("").is_empty());
+    }
+
+    #[test]
+    fn test_parse_lsof_output_writable_fd_boundary() {
+        // Test that 'f' field resets access mode
+        let output = "cnode\nf0\naw\nn/tmp/writable.txt\nf1\nar\nn/tmp/readonly.txt\n";
+        let files = parse_lsof_output_writable(output);
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].0, "/tmp/writable.txt");
+    }
+
+    #[test]
+    fn test_get_open_files_lsof_current_process() {
+        // This exercises the lsof path on macOS
+        let files = get_open_files_lsof(std::process::id());
+        // Should return at least something (our binary, libraries, etc.)
+        // Don't assert specific count as it varies
+        let _ = files;
+    }
 }

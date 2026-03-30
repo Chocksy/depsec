@@ -40,20 +40,10 @@ fn check_security_md(ctx: &ScanContext, findings: &mut Vec<Finding>, pass: &mut 
     if security_md.exists() || security_md_lower.exists() {
         pass.push("SECURITY.md exists".into());
     } else {
-        findings.push(Finding {
-            rule_id: "DEPSEC-H001".into(),
-            severity: Severity::Medium,
-            message: "No SECURITY.md found".into(),
-            file: None,
-            line: None,
-            suggestion: Some(
-                "Create a SECURITY.md with vulnerability reporting instructions".into(),
-            ),
-            confidence: None,
-            package: None,
-            reachable: None,
-            auto_fixable: false,
-        });
+        findings.push(
+            Finding::new("DEPSEC-H001", Severity::Medium, "No SECURITY.md found")
+                .with_suggestion("Create a SECURITY.md with vulnerability reporting instructions"),
+        );
     }
 }
 
@@ -61,18 +51,10 @@ fn check_gitignore(ctx: &ScanContext, findings: &mut Vec<Finding>, pass: &mut Ve
     let gitignore = ctx.root.join(".gitignore");
 
     if !gitignore.exists() {
-        findings.push(Finding {
-            rule_id: "DEPSEC-H002".into(),
-            severity: Severity::Low,
-            message: "No .gitignore file found".into(),
-            file: None,
-            line: None,
-            suggestion: Some("Create a .gitignore covering sensitive files".into()),
-            confidence: None,
-            package: None,
-            reachable: None,
-            auto_fixable: false,
-        });
+        findings.push(
+            Finding::new("DEPSEC-H002", Severity::Low, "No .gitignore file found")
+                .with_suggestion("Create a .gitignore covering sensitive files"),
+        );
         return;
     }
 
@@ -94,24 +76,11 @@ fn check_gitignore(ctx: &ScanContext, findings: &mut Vec<Finding>, pass: &mut Ve
     if missing.is_empty() {
         pass.push(".gitignore covers sensitive patterns".into());
     } else {
-        findings.push(Finding {
-            rule_id: "DEPSEC-H002".into(),
-            severity: Severity::Low,
-            message: format!(
-                ".gitignore missing sensitive patterns: {}",
-                missing.join(", ")
-            ),
-            file: Some(".gitignore".into()),
-            line: None,
-            suggestion: Some(format!(
-                "Add these patterns to .gitignore: {}",
-                missing.join(", ")
-            )),
-            confidence: None,
-            package: None,
-            reachable: None,
-            auto_fixable: false,
-        });
+        findings.push(
+            Finding::new("DEPSEC-H002", Severity::Low, format!(".gitignore missing sensitive patterns: {}", missing.join(", ")))
+                .with_file_only(".gitignore")
+                .with_suggestion(format!("Add these patterns to .gitignore: {}", missing.join(", "))),
+        );
     }
 }
 
@@ -153,20 +122,11 @@ fn check_lockfile_committed(
 
             if let Ok(out) = output {
                 if out.status.success() {
-                    findings.push(Finding {
-                        rule_id: "DEPSEC-H003".into(),
-                        severity: Severity::High,
-                        message: format!("Lockfile {lockfile} is gitignored"),
-                        file: Some(lockfile.to_string()),
-                        line: None,
-                        suggestion: Some(format!(
-                            "Remove {lockfile} from .gitignore and commit it"
-                        )),
-                        confidence: None,
-                        package: None,
-                        reachable: None,
-                        auto_fixable: false,
-                    });
+                    findings.push(
+                        Finding::new("DEPSEC-H003", Severity::High, format!("Lockfile {lockfile} is gitignored"))
+                            .with_file_only(lockfile.to_string())
+                            .with_suggestion(format!("Remove {lockfile} from .gitignore and commit it")),
+                    );
                 }
             }
         }
@@ -220,20 +180,10 @@ fn check_branch_protection(ctx: &ScanContext, findings: &mut Vec<Finding>, pass:
             pass.push("Branch protection enabled on main".into());
         }
         Err(ureq::Error::Status(404, _)) => {
-            findings.push(Finding {
-                rule_id: "DEPSEC-H004".into(),
-                severity: Severity::Medium,
-                message: "No branch protection on main".into(),
-                file: None,
-                line: None,
-                suggestion: Some(format!(
-                    "Enable at https://github.com/{owner}/{repo}/settings/branches"
-                )),
-                confidence: None,
-                package: None,
-                reachable: None,
-                auto_fixable: false,
-            });
+            findings.push(
+                Finding::new("DEPSEC-H004", Severity::Medium, "No branch protection on main")
+                    .with_suggestion(format!("Enable at https://github.com/{owner}/{repo}/settings/branches")),
+            );
         }
         Err(_) => {} // API error — skip silently
     }

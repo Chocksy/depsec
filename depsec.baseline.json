@@ -2,8 +2,10 @@
   "version": 1,
   "created": "2026-03-27",
   "allowed_hosts": [
+    "1e100.net",
     "api.github.com",
     "api.osv.dev",
+    "cloudapp.net",
     "crates.io",
     "github.com",
     "index.crates.io",

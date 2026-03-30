@@ -6,6 +6,7 @@ mod baseline;
 #[allow(dead_code)]
 mod canary;
 mod checks;
+mod commands;
 mod config;
 mod fixer;
 mod install_guard;
@@ -30,7 +31,7 @@ mod triage_cache;
 mod utils;
 mod watchdog;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand, ValueEnum};
@@ -60,178 +61,115 @@ struct Cli {
 enum Commands {
     /// Run security checks on a project
     Scan {
-        /// Path to the project root
         #[arg(default_value = ".")]
         path: PathBuf,
-
-        /// Comma-separated list of checks to run
         #[arg(long, value_delimiter = ',')]
         checks: Option<Vec<String>>,
-
-        /// Output as JSON
         #[arg(long)]
         json: bool,
-
-        /// Output format: human (default), json, sarif
         #[arg(long, value_name = "FORMAT")]
         format: Option<String>,
-
-        /// Finding visibility level: regular (high-confidence only), pedantic (medium+), auditor (all)
         #[arg(long, value_enum, default_value = "regular")]
         persona: Persona,
-
-        /// Show all findings (no persona filtering, no aggregation)
         #[arg(long)]
         verbose: bool,
-
-        /// Run LLM triage on findings (requires OPENROUTER_API_KEY)
         #[arg(long)]
         triage: bool,
-
-        /// Show what would be sent to LLM without making API calls
         #[arg(long)]
         triage_dry_run: bool,
     },
-
     /// Auto-fix security issues
     Fix {
-        /// Path to the project root
         #[arg(default_value = ".")]
         path: PathBuf,
-
-        /// Preview changes without writing
         #[arg(long)]
         dry_run: bool,
     },
-
     /// Manage network baselines
     Baseline {
         #[command(subcommand)]
         action: BaselineAction,
     },
-
     /// Monitor network activity of a command
     Monitor {
-        /// Record connections as expected (learning mode)
         #[arg(long)]
         learn: bool,
-
-        /// Fail on unexpected connections
         #[arg(long)]
         strict: bool,
-
-        /// Output as JSON
         #[arg(long)]
         json: bool,
-
-        /// Path to baseline file
         #[arg(long)]
         baseline: Option<PathBuf>,
-
-        /// Command and arguments to monitor
         #[arg(trailing_var_arg = true, required = true)]
         command: Vec<String>,
     },
-
     /// Pre-install threat analysis
     Preflight {
-        /// Path to the project root
         #[arg(default_value = ".")]
         path: PathBuf,
-
-        /// Output as JSON
         #[arg(long)]
         json: bool,
     },
-
     /// Manage detection rules
     Rules {
         #[command(subcommand)]
         action: RulesAction,
     },
-
     /// Verify depsec's own integrity
     SelfCheck {
-        /// Path to the project root
         #[arg(default_value = ".")]
         path: PathBuf,
     },
-
     /// Generate shell aliases for invisible protection
     ShellHook,
-
     /// Generate SVG scorecard image
     Scorecard {
-        /// Path to the project root
         #[arg(default_value = ".")]
         path: PathBuf,
-
-        /// Output file (default: depsec-scorecard.svg)
         #[arg(short, long, default_value = "depsec-scorecard.svg")]
         output: PathBuf,
     },
-
     /// Protected package install — preflight + monitor + report
     InstallGuard {
-        /// Output as JSON
         #[arg(long)]
         json: bool,
-
-        /// Command and arguments to run (e.g., npm install lodash)
         #[arg(trailing_var_arg = true, required = true)]
         command: Vec<String>,
     },
-
     /// Deep security audit of a specific package
     Audit {
-        /// Package name to audit (e.g., shelljs, @scope/pkg)
         package: String,
-
-        /// Path to the project root
         #[arg(long, default_value = ".")]
         path: PathBuf,
-
-        /// Preview what would be analyzed without calling LLM
         #[arg(long)]
         dry_run: bool,
-
-        /// Maximum budget in USD
         #[arg(long, default_value = "5.0")]
         budget: f64,
     },
-
     /// Install/uninstall git pre-commit hook for secret detection
     Hook {
         #[command(subcommand)]
         action: HookAction,
     },
-
     /// Check staged files for secrets (used by pre-commit hook)
     SecretsCheck {
-        /// Only check staged files (for pre-commit hook)
         #[arg(long)]
         staged: bool,
-
-        /// Path to the project root
         #[arg(default_value = ".")]
         path: PathBuf,
     },
-
     /// Manage build attestations
     Attestation {
         #[command(subcommand)]
         action: AttestationAction,
     },
-
     /// Manage triage cache
     Cache {
         #[command(subcommand)]
         action: CacheAction,
     },
-
     /// Output badge markdown
     Badge {
-        /// Path to the project root
         #[arg(default_value = ".")]
         path: PathBuf,
     },
@@ -239,23 +177,17 @@ enum Commands {
 
 #[derive(Subcommand)]
 enum HookAction {
-    /// Install pre-commit hook in .git/hooks/
     Install,
-    /// Remove the pre-commit hook
     Uninstall,
 }
 
 #[derive(Subcommand)]
 enum AttestationAction {
-    /// Verify the build attestation
     Verify {
-        /// Path to the project root
         #[arg(default_value = ".")]
         path: PathBuf,
     },
-    /// Show a one-line attestation summary (for PR comments)
     Summary {
-        /// Path to the project root
         #[arg(default_value = ".")]
         path: PathBuf,
     },
@@ -263,52 +195,41 @@ enum AttestationAction {
 
 #[derive(Subcommand)]
 enum CacheAction {
-    /// Clear all cached triage results
     Clear,
-    /// Show cache statistics
     Stats,
 }
 
 #[derive(Subcommand)]
 enum RulesAction {
-    /// List all active rules
     List,
-
-    /// Update rules from community repository
     Update,
-
-    /// Add a custom rule file
-    Add {
-        /// Path to the rule file
-        path: PathBuf,
-    },
+    Add { path: PathBuf },
 }
 
 #[derive(Subcommand)]
 enum BaselineAction {
-    /// Generate a network baseline file
     Init {
-        /// Path to the project root
         #[arg(default_value = ".")]
         path: PathBuf,
     },
-
-    /// Compare CI run against baseline
     Check {
-        /// Path to the capture file
         #[arg(long)]
         capture: Option<PathBuf>,
     },
 }
 
 fn use_color(no_color_flag: bool) -> bool {
-    if no_color_flag {
-        return false;
-    }
-    if std::env::var("NO_COLOR").is_ok() {
+    if no_color_flag || std::env::var("NO_COLOR").is_ok() {
         return false;
     }
     true
+}
+
+fn canonicalize_or_exit(path: &Path) -> Result<PathBuf, ExitCode> {
+    path.canonicalize().map_err(|e| {
+        eprintln!("Error: invalid path '{}': {e}", path.display());
+        ExitCode::from(2)
+    })
 }
 
 fn main() -> ExitCode {
@@ -317,617 +238,101 @@ fn main() -> ExitCode {
 
     match cli.command {
         Commands::Scan {
-            path,
-            checks,
-            json,
-            format,
-            persona,
-            verbose,
-            triage,
-            triage_dry_run,
+            path, checks, json, format, persona, verbose, triage, triage_dry_run,
         } => {
-            let root = match path.canonicalize() {
-                Ok(p) => p,
-                Err(e) => {
-                    eprintln!("Error: invalid path '{}': {e}", path.display());
-                    return ExitCode::from(2);
-                }
-            };
-
-            let config = config::load_config(&root);
-            let filter = checks.as_deref();
-
-            match scanner::run_scan(&root, &config, filter) {
-                Ok(mut report) => {
-                    // Tag pattern findings with reachability
-                    let app_imports = reachability::scan_app_imports(&root);
-                    for result in &mut report.results {
-                        for finding in &mut result.findings {
-                            if let Some(pkg) = &finding.package {
-                                finding.reachable = Some(app_imports.packages.contains(pkg));
-                            }
-                        }
-                    }
-
-                    let fmt = format
-                        .as_deref()
-                        .unwrap_or(if json { "json" } else { "human" });
-                    match fmt {
-                        "json" => match output::render_json(&report) {
-                            Ok(json_str) => println!("{json_str}"),
-                            Err(e) => {
-                                eprintln!("Error rendering JSON: {e}");
-                                return ExitCode::from(2);
-                            }
-                        },
-                        "sarif" => match sarif::render_sarif(&report) {
-                            Ok(sarif_str) => println!("{sarif_str}"),
-                            Err(e) => {
-                                eprintln!("Error rendering SARIF: {e}");
-                                return ExitCode::from(2);
-                            }
-                        },
-                        _ => {
-                            print!("{}", output::render_human(&report, color, persona, verbose));
-                        }
-                    }
-
-                    // LLM triage (optional)
-                    if triage || triage_dry_run {
-                        // Collect visible findings for triage
-                        let visible_findings: Vec<crate::checks::Finding> = report
-                            .results
-                            .iter()
-                            .flat_map(|r| &r.findings)
-                            .filter(|f| verbose || output::finding_visible(f, persona))
-                            .cloned()
-                            .collect();
-
-                        if visible_findings.is_empty() {
-                            eprintln!("No findings to triage.");
-                        } else if triage_dry_run {
-                            // Dry run: show what would be sent, no API calls needed
-                            triage::dry_run_findings(&visible_findings, &root, &config.triage);
-                        } else {
-                            // Real triage: requires API key
-                            let client = match llm::LlmClient::from_config(&config.triage) {
-                                Some(c) => c,
-                                None => {
-                                    llm::print_setup_instructions();
-                                    return ExitCode::from(2);
-                                }
-                            };
-
-                            let est_tokens = visible_findings.len() as u32 * 2000;
-                            let est_cost = client
-                                .estimate_cost(est_tokens, visible_findings.len() as u32 * 200);
-                            eprintln!(
-                                "\nTriaging {} findings with {} (~${:.4} estimated)...\n",
-                                visible_findings.len(),
-                                client.model(),
-                                est_cost,
-                            );
-
-                            let results = triage::triage_findings(
-                                &visible_findings,
-                                &root,
-                                &client,
-                                &config.triage,
-                            );
-
-                            print!(
-                                "{}",
-                                triage::render_triage_results(&visible_findings, &results, color)
-                            );
-                        }
-                    }
-
-                    // Exit code respects persona: only visible findings cause non-zero exit
-                    let has_visible_findings = report.results.iter().any(|r| {
-                        r.findings
-                            .iter()
-                            .any(|f| verbose || output::finding_visible(f, persona))
-                    });
-
-                    if has_visible_findings {
-                        ExitCode::from(1)
-                    } else {
-                        ExitCode::SUCCESS
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Error: {e}");
-                    ExitCode::from(2)
-                }
-            }
+            let root = match canonicalize_or_exit(&path) { Ok(r) => r, Err(e) => return e };
+            commands::scan::run(&root, &commands::scan::ScanOpts {
+                checks: checks.as_deref(),
+                format: format.as_deref(),
+                json,
+                persona,
+                verbose,
+                triage,
+                triage_dry_run,
+                color,
+            })
         }
 
         Commands::Fix { path, dry_run } => {
-            let root = match path.canonicalize() {
-                Ok(p) => p,
-                Err(e) => {
-                    eprintln!("Error: invalid path '{}': {e}", path.display());
-                    return ExitCode::from(2);
-                }
-            };
-
-            match fixer::fix_workflow_pinning(&root, dry_run) {
-                Ok(results) => {
-                    fixer::print_fix_results(&results, dry_run);
-                    let any_failed = results.iter().any(|r| !r.applied);
-                    if any_failed {
-                        ExitCode::from(1)
-                    } else {
-                        ExitCode::SUCCESS
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Error: {e}");
-                    ExitCode::from(2)
-                }
-            }
+            let root = match canonicalize_or_exit(&path) { Ok(r) => r, Err(e) => return e };
+            commands::misc::fix(&root, dry_run)
         }
 
-        Commands::Monitor {
-            learn,
-            strict,
-            json,
-            baseline,
-            command,
-        } => match monitor::run_monitor(&command, baseline.as_deref(), learn, json) {
-            Ok(result) => {
-                let has_critical = !result.critical.is_empty();
-                let has_unexpected = !result.unexpected.is_empty();
-                if has_critical || (strict && has_unexpected) {
-                    ExitCode::from(1)
-                } else {
-                    ExitCode::from(result.exit_code as u8)
-                }
-            }
-            Err(e) => {
-                eprintln!("Error: {e}");
-                ExitCode::from(2)
-            }
-        },
+        Commands::Monitor { learn, strict, json, baseline, command } => {
+            commands::misc::monitor_cmd(&command, baseline.as_deref(), learn, json, strict)
+        }
 
         Commands::Preflight { path, json } => {
-            let root = match path.canonicalize() {
-                Ok(p) => p,
-                Err(e) => {
-                    eprintln!("Error: invalid path '{}': {e}", path.display());
-                    return ExitCode::from(2);
-                }
-            };
-
-            match preflight::run_preflight(&root, json) {
-                Ok(result) => {
-                    let has_high = result.findings.iter().any(|f| {
-                        matches!(
-                            f.severity,
-                            crate::checks::Severity::Critical | crate::checks::Severity::High
-                        )
-                    });
-                    if has_high {
-                        ExitCode::from(1)
-                    } else {
-                        ExitCode::SUCCESS
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Error: {e}");
-                    ExitCode::from(2)
-                }
-            }
+            let root = match canonicalize_or_exit(&path) { Ok(r) => r, Err(e) => return e };
+            commands::misc::preflight(&root, json)
         }
 
-        Commands::Rules { action } => {
-            let root = std::env::current_dir().unwrap_or_else(|_| ".".into());
-            match action {
-                RulesAction::List => {
-                    rules::list_rules(&root);
-                    ExitCode::SUCCESS
-                }
-                RulesAction::Update => match rules::update_rules(&root) {
-                    Ok(count) => {
-                        println!("{count} rules updated.");
-                        ExitCode::SUCCESS
-                    }
-                    Err(e) => {
-                        eprintln!("Error: {e}");
-                        ExitCode::from(2)
-                    }
-                },
-                RulesAction::Add { path } => match rules::add_rule(&root, &path) {
-                    Ok(()) => ExitCode::SUCCESS,
-                    Err(e) => {
-                        eprintln!("Error: {e}");
-                        ExitCode::from(2)
-                    }
-                },
-            }
-        }
+        Commands::Rules { action } => match action {
+            RulesAction::List => commands::misc::rules_list(),
+            RulesAction::Update => commands::misc::rules_update(),
+            RulesAction::Add { path } => commands::misc::rules_add(&path),
+        },
 
         Commands::Baseline { action } => match action {
             BaselineAction::Init { path } => {
-                let root = match path.canonicalize() {
-                    Ok(p) => p,
-                    Err(e) => {
-                        eprintln!("Error: invalid path '{}': {e}", path.display());
-                        return ExitCode::from(2);
-                    }
-                };
-
-                match baseline::init_baseline(&root) {
-                    Ok(output_path) => {
-                        println!("Baseline created: {output_path}");
-                        println!("Edit allowed_hosts and commit the file.");
-                        ExitCode::SUCCESS
-                    }
-                    Err(e) => {
-                        eprintln!("Error: {e}");
-                        ExitCode::from(2)
-                    }
-                }
+                let root = match canonicalize_or_exit(&path) { Ok(r) => r, Err(e) => return e };
+                commands::misc::baseline_init(&root)
             }
             BaselineAction::Check { capture } => {
-                let root = std::env::current_dir().unwrap_or_else(|_| ".".into());
-
-                match baseline::check_baseline(&root, capture.as_deref()) {
-                    Ok(result) => {
-                        baseline::print_baseline_check(&result, color);
-                        if result.passed() {
-                            ExitCode::SUCCESS
-                        } else {
-                            ExitCode::from(1)
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Error: {e}");
-                        ExitCode::from(2)
-                    }
-                }
+                commands::misc::baseline_check(capture.as_deref(), color)
             }
         },
 
         Commands::SelfCheck { path } => {
-            let root = match path.canonicalize() {
-                Ok(p) => p,
-                Err(e) => {
-                    eprintln!("Error: invalid path '{}': {e}", path.display());
-                    return ExitCode::from(2);
-                }
-            };
-            selfcheck::run_self_check(&root);
-            ExitCode::SUCCESS
+            let root = match canonicalize_or_exit(&path) { Ok(r) => r, Err(e) => return e };
+            commands::misc::self_check(&root)
         }
 
-        Commands::ShellHook => {
-            print!("{}", shellhook::generate_shell_hook());
-            ExitCode::SUCCESS
-        }
+        Commands::ShellHook => commands::misc::shell_hook(),
 
         Commands::Scorecard { path, output } => {
-            let root = match path.canonicalize() {
-                Ok(p) => p,
-                Err(e) => {
-                    eprintln!("Error: invalid path '{}': {e}", path.display());
-                    return ExitCode::from(2);
-                }
-            };
-
-            let config = config::load_config(&root);
-            match scanner::run_scan(&root, &config, None) {
-                Ok(report) => {
-                    let svg = scorecard::generate_svg(&report);
-                    match std::fs::write(&output, &svg) {
-                        Ok(()) => {
-                            println!("Scorecard saved to {}", output.display());
-                            println!(
-                                "Add to README: <img src=\"{}\" width=\"480\">",
-                                output.display()
-                            );
-                            ExitCode::SUCCESS
-                        }
-                        Err(e) => {
-                            eprintln!("Error writing scorecard: {e}");
-                            ExitCode::from(2)
-                        }
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Error: {e}");
-                    ExitCode::from(2)
-                }
-            }
+            let root = match canonicalize_or_exit(&path) { Ok(r) => r, Err(e) => return e };
+            commands::misc::scorecard(&root, &output)
         }
 
         Commands::InstallGuard { json, command } => {
-            let root = std::env::current_dir().unwrap_or_else(|_| ".".into());
-            let config = config::load_config(&root);
-
-            match install_guard::run_install_guard(&command, &root, &config.install, json) {
-                Ok(result) => {
-                    if result.has_issues {
-                        ExitCode::from(1)
-                    } else {
-                        ExitCode::from(result.exit_code as u8)
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Error: {e}");
-                    ExitCode::from(2)
-                }
-            }
+            commands::misc::install_guard(&command, json)
         }
 
-        Commands::Audit {
-            package,
-            path,
-            dry_run,
-            budget: _budget,
-        } => {
-            let root = match path.canonicalize() {
-                Ok(p) => p,
-                Err(e) => {
-                    eprintln!("Error: invalid path '{}': {e}", path.display());
-                    return ExitCode::from(2);
-                }
-            };
-
-            let config = config::load_config(&root);
-
-            // Locate and profile the package
-            let profile = match audit::locate_package(&package, &root) {
-                Ok(p) => p,
-                Err(e) => {
-                    eprintln!("Error: {e}");
-                    return ExitCode::from(2);
-                }
-            };
-
-            if dry_run {
-                print!(
-                    "{}",
-                    audit::render_audit_results(
-                        &audit::AuditResult {
-                            profile,
-                            findings: vec![],
-                            total_tokens: 0,
-                            rounds: 0,
-                        },
-                        color,
-                    )
-                );
-                return ExitCode::SUCCESS;
-            }
-
-            // Require API key for real audit
-            let client = match llm::LlmClient::from_config(&config.triage) {
-                Some(c) => c,
-                None => {
-                    llm::print_setup_instructions();
-                    return ExitCode::from(2);
-                }
-            };
-
-            match audit::run_audit(&profile, &client, &config.triage, false) {
-                Ok(result) => {
-                    print!("{}", audit::render_audit_results(&result, color));
-                    if result.findings.is_empty() {
-                        ExitCode::SUCCESS
-                    } else {
-                        ExitCode::from(1)
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Error during audit: {e}");
-                    ExitCode::from(2)
-                }
-            }
+        Commands::Audit { package, path, dry_run, budget: _ } => {
+            let root = match canonicalize_or_exit(&path) { Ok(r) => r, Err(e) => return e };
+            commands::audit_cmd::run(&package, &root, dry_run, color)
         }
 
         Commands::Hook { action } => match action {
-            HookAction::Install => {
-                let git_hooks = std::path::Path::new(".git/hooks");
-                if !git_hooks.exists() {
-                    eprintln!("Error: .git/hooks not found. Are you in a git repository?");
-                    return ExitCode::from(2);
-                }
-                let hook_path = git_hooks.join("pre-commit");
-                let hook_content = "#!/bin/sh\n# depsec pre-commit hook — blocks commits with hardcoded secrets\nexec depsec secrets-check --staged\n";
-                match std::fs::write(&hook_path, hook_content) {
-                    Ok(()) => {
-                        // Make executable
-                        #[cfg(unix)]
-                        {
-                            use std::os::unix::fs::PermissionsExt;
-                            let _ = std::fs::set_permissions(
-                                &hook_path,
-                                std::fs::Permissions::from_mode(0o755),
-                            );
-                        }
-                        println!("Installed pre-commit hook at .git/hooks/pre-commit");
-                        println!("Secrets will be checked on every commit.");
-                        println!("To bypass: git commit --no-verify");
-                        ExitCode::SUCCESS
-                    }
-                    Err(e) => {
-                        eprintln!("Error installing hook: {e}");
-                        ExitCode::from(2)
-                    }
-                }
-            }
-            HookAction::Uninstall => {
-                let hook_path = std::path::Path::new(".git/hooks/pre-commit");
-                if hook_path.exists() {
-                    match std::fs::remove_file(hook_path) {
-                        Ok(()) => {
-                            println!("Removed pre-commit hook.");
-                            ExitCode::SUCCESS
-                        }
-                        Err(e) => {
-                            eprintln!("Error removing hook: {e}");
-                            ExitCode::from(2)
-                        }
-                    }
-                } else {
-                    println!("No pre-commit hook found.");
-                    ExitCode::SUCCESS
-                }
-            }
+            HookAction::Install => commands::hook::install(),
+            HookAction::Uninstall => commands::hook::uninstall(),
         },
 
         Commands::SecretsCheck { staged, path } => {
             let root = path.canonicalize().unwrap_or(path);
-
-            // Get files to check
-            let files: Vec<std::path::PathBuf> = if staged {
-                // Only staged files
-                match std::process::Command::new("git")
-                    .args(["diff", "--cached", "--name-only", "--diff-filter=ACM"])
-                    .current_dir(&root)
-                    .output()
-                {
-                    Ok(output) => String::from_utf8_lossy(&output.stdout)
-                        .lines()
-                        .filter(|l| !l.is_empty())
-                        .map(|l| root.join(l))
-                        .filter(|p| p.exists())
-                        .collect(),
-                    Err(_) => {
-                        eprintln!("Error: failed to get staged files from git");
-                        return ExitCode::from(2);
-                    }
-                }
-            } else {
-                // All tracked files
-                match std::process::Command::new("git")
-                    .args(["ls-files"])
-                    .current_dir(&root)
-                    .output()
-                {
-                    Ok(output) => String::from_utf8_lossy(&output.stdout)
-                        .lines()
-                        .filter(|l| !l.is_empty())
-                        .map(|l| root.join(l))
-                        .filter(|p| p.exists())
-                        .collect(),
-                    Err(_) => vec![],
-                }
-            };
-
-            if files.is_empty() {
-                println!("No files to check.");
-                return ExitCode::SUCCESS;
-            }
-
-            let findings = secrets_ast::scan_for_secrets(&root, &files);
-
-            if findings.is_empty() {
-                ExitCode::SUCCESS
-            } else {
-                eprintln!(
-                    "\n\x1b[31mdepsec: {} potential secret{} detected in {}files\x1b[0m\n",
-                    findings.len(),
-                    if findings.len() == 1 { "" } else { "s" },
-                    if staged { "staged " } else { "" },
-                );
-                for f in &findings {
-                    let location = match (&f.file, f.line) {
-                        (Some(file), Some(line)) => format!("{file}:{line}"),
-                        (Some(file), None) => file.clone(),
-                        _ => "?".into(),
-                    };
-                    eprintln!("  \x1b[31m✗\x1b[0m {location} — {}", f.message);
-                    if let Some(ref suggestion) = f.suggestion {
-                        eprintln!("    → {suggestion}");
-                    }
-                }
-                eprintln!("\nCommit blocked. To proceed anyway: git commit --no-verify");
-                eprintln!("To allowlist: add '// depsec:allow' comment on the line");
-                ExitCode::from(1)
-            }
+            commands::secrets::check(staged, &root)
         }
 
         Commands::Attestation { action } => match action {
             AttestationAction::Verify { path } => {
                 let root = path.canonicalize().unwrap_or(path);
-                match attestation::verify_attestation(&root) {
-                    Ok(result) => {
-                        println!("{}", result.message);
-                        if result.valid {
-                            ExitCode::SUCCESS
-                        } else {
-                            ExitCode::from(1)
-                        }
-                    }
-                    Err(e) => {
-                        eprintln!("Error: {e}");
-                        ExitCode::from(2)
-                    }
-                }
+                commands::misc::attestation_verify(&root)
             }
             AttestationAction::Summary { path } => {
                 let root = path.canonicalize().unwrap_or(path);
-                match attestation::attestation_summary(&root) {
-                    Ok(summary) => {
-                        println!("{summary}");
-                        ExitCode::SUCCESS
-                    }
-                    Err(e) => {
-                        eprintln!("Error: {e}");
-                        ExitCode::from(2)
-                    }
-                }
+                commands::misc::attestation_summary(&root)
             }
         },
 
         Commands::Cache { action } => match action {
-            CacheAction::Clear => match triage_cache::clear_cache() {
-                Ok(count) => {
-                    println!("Cleared {count} cached triage results.");
-                    ExitCode::SUCCESS
-                }
-                Err(e) => {
-                    eprintln!("Error clearing cache: {e}");
-                    ExitCode::from(2)
-                }
-            },
-            CacheAction::Stats => {
-                let (count, size) = triage_cache::cache_stats();
-                println!(
-                    "Triage cache: {count} entries, {:.1}KB",
-                    size as f64 / 1024.0
-                );
-                ExitCode::SUCCESS
-            }
+            CacheAction::Clear => commands::misc::cache_clear(),
+            CacheAction::Stats => commands::misc::cache_stats(),
         },
 
         Commands::Badge { path } => {
-            let root = match path.canonicalize() {
-                Ok(p) => p,
-                Err(e) => {
-                    eprintln!("Error: invalid path '{}': {e}", path.display());
-                    return ExitCode::from(2);
-                }
-            };
-
-            let config = config::load_config(&root);
-
-            match scanner::run_scan(&root, &config, None) {
-                Ok(report) => {
-                    let color_code = report.grade.color_code();
-                    println!(
-                        "[![DepSec Score](https://img.shields.io/badge/depsec-{}-{color_code})](https://github.com/chocksy/depsec)",
-                        report.grade
-                    );
-                    ExitCode::SUCCESS
-                }
-                Err(e) => {
-                    eprintln!("Error: {e}");
-                    ExitCode::from(2)
-                }
-            }
+            let root = match canonicalize_or_exit(&path) { Ok(r) => r, Err(e) => return e };
+            commands::misc::badge(&root)
         }
     }
 }

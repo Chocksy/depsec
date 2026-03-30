@@ -133,20 +133,70 @@ mod tests {
 
     #[test]
     fn test_category_score_with_findings() {
-        let findings = vec![Finding {
-            rule_id: "TEST-001".into(),
-            severity: Severity::High,
-            message: "test".into(),
-            file: None,
-            line: None,
-            suggestion: None,
-            confidence: None,
-            package: None,
-            reachable: None,
-            auto_fixable: false,
-        }];
+        let findings = vec![Finding::new("TEST-001", Severity::High, "test")];
         let score = compute_category_score(25.0, &findings);
         assert!(score < 25.0);
         assert!(score >= 0.0);
+    }
+
+    #[test]
+    fn test_grade_display() {
+        assert_eq!(Grade::A.to_string(), "A");
+        assert_eq!(Grade::B.to_string(), "B");
+        assert_eq!(Grade::C.to_string(), "C");
+        assert_eq!(Grade::D.to_string(), "D");
+        assert_eq!(Grade::F.to_string(), "F");
+    }
+
+    #[test]
+    fn test_grade_color_code() {
+        assert_eq!(Grade::A.color_code(), "brightgreen");
+        assert_eq!(Grade::B.color_code(), "green");
+        assert_eq!(Grade::C.color_code(), "yellow");
+        assert_eq!(Grade::D.color_code(), "orange");
+        assert_eq!(Grade::F.color_code(), "red");
+    }
+
+    #[test]
+    fn test_category_score_build_only_reduced() {
+        // Build-only finding should have less impact
+        let mut finding = Finding::new("TEST-001", Severity::High, "test");
+        finding.reachable = Some(false);
+        let build_score = compute_category_score(25.0, &[finding]);
+
+        let runtime_finding = Finding::new("TEST-001", Severity::High, "test");
+        let runtime_score = compute_category_score(25.0, &[runtime_finding]);
+
+        // Build-only should lose fewer points
+        assert!(build_score > runtime_score);
+    }
+
+    #[test]
+    fn test_category_score_multiple_severities() {
+        let findings = vec![
+            Finding::new("T1", Severity::Critical, "crit"),
+            Finding::new("T2", Severity::Low, "low"),
+        ];
+        let score = compute_category_score(25.0, &findings);
+        assert!(score >= 0.0);
+        assert!(score < 25.0);
+    }
+
+    #[test]
+    fn test_severity_deduction_multiplier() {
+        assert_eq!(Severity::Critical.deduction_multiplier(), 3.0);
+        assert_eq!(Severity::High.deduction_multiplier(), 2.0);
+        assert_eq!(Severity::Medium.deduction_multiplier(), 1.0);
+        assert_eq!(Severity::Low.deduction_multiplier(), 0.5);
+    }
+
+    #[test]
+    fn test_total_score_partial() {
+        let results = vec![CheckResult::new("test", vec![
+            Finding::new("T1", Severity::Low, "minor issue"),
+        ], 25.0, vec![])];
+        let score = compute_total_score(&results);
+        assert!(score < 100.0);
+        assert!(score > 0.0);
     }
 }

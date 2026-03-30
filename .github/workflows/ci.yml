@@ -27,6 +27,11 @@ jobs:
       - name: Run tests
         run: cargo test
 
+      - name: Check unused dependencies
+        run: |
+          cargo install cargo-machete --locked
+          cargo machete
+
   # Self-scan (dogfooding) — runs after build
   security:
     name: Security Scan

@@ -85,18 +85,11 @@ fn check_lockfile_committed(ctx: &ScanContext, lockfiles: &[String], findings: &
         if let Ok(out) = output {
             if out.status.success() {
                 // File IS ignored by git
-                findings.push(Finding {
-                    rule_id: "DEPSEC-D001".into(),
-                    severity: Severity::High,
-                    message: format!("Lockfile {lockfile} is gitignored — should be committed"),
-                    file: Some(lockfile.clone()),
-                    line: None,
-                    suggestion: Some("Remove lockfile from .gitignore and commit it".into()),
-                    confidence: None,
-                    package: None,
-                    reachable: None,
-                    auto_fixable: false,
-                });
+                findings.push(
+                    Finding::new("DEPSEC-D001", Severity::High, format!("Lockfile {lockfile} is gitignored — should be committed"))
+                        .with_file_only(lockfile.clone())
+                        .with_suggestion("Remove lockfile from .gitignore and commit it"),
+                );
             }
         }
     }
@@ -120,6 +113,10 @@ struct OsvPackage {
 }
 
 fn query_osv_batch(packages: &[Package]) -> anyhow::Result<Vec<Finding>> {
+    query_osv_batch_url(packages, OSV_BATCH_URL)
+}
+
+fn query_osv_batch_url(packages: &[Package], osv_url: &str) -> anyhow::Result<Vec<Finding>> {
     if packages.is_empty() {
         return Ok(vec![]);
     }
@@ -148,7 +145,7 @@ fn query_osv_batch(packages: &[Package]) -> anyhow::Result<Vec<Finding>> {
         let batch = OsvBatchQuery { queries };
 
         let resp = agent
-            .post(OSV_BATCH_URL)
+            .post(osv_url)
             .send_json(serde_json::to_value(&batch)?)
             .context("OSV API request failed")?;
 
@@ -196,18 +193,10 @@ fn query_osv_batch(packages: &[Package]) -> anyhow::Result<Vec<Finding>> {
                             format!("Review advisory {id} for remediation steps")
                         };
 
-                        all_findings.push(Finding {
-                            rule_id,
-                            severity,
-                            message,
-                            file: None,
-                            line: None,
-                            suggestion: Some(suggestion),
-                            confidence: None,
-                            package: None,
-                            reachable: None,
-                            auto_fixable: false,
-                        });
+                        all_findings.push(
+                            Finding::new(rule_id, severity, message)
+                                .with_suggestion(suggestion),
+                        );
                     }
                 }
             }
@@ -366,5 +355,167 @@ mod tests {
         });
         let fix = extract_fix_version(&vuln, &parsers::Ecosystem::Npm);
         assert_eq!(fix, Some("2.0.1".to_string()));
+    }
+
+    // --- httpmock tests for OSV API ---
+    use httpmock::prelude::*;
+
+    #[test]
+    fn test_osv_returns_vulnerability() {
+        let server = MockServer::start();
+
+        server.mock(|when, then| {
+            when.method(POST).path("/v1/querybatch");
+            then.status(200)
+                .header("content-type", "application/json")
+                .json_body(serde_json::json!({
+                    "results": [{
+                        "vulns": [{
+                            "id": "GHSA-xxxx-yyyy-zzzz",
+                            "summary": "Prototype pollution in lodash",
+                            "severity": [{"score": "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H"}],
+                            "affected": [{
+                                "ranges": [{
+                                    "type": "ECOSYSTEM",
+                                    "events": [
+                                        {"introduced": "0"},
+                                        {"fixed": "4.17.21"}
+                                    ]
+                                }]
+                            }]
+                        }]
+                    }]
+                }));
+        });
+
+        let packages = vec![Package {
+            name: "lodash".into(),
+            version: "4.17.20".into(),
+            ecosystem: parsers::Ecosystem::Npm,
+        }];
+
+        let findings = query_osv_batch_url(&packages, &server.url("/v1/querybatch")).unwrap();
+
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].rule_id.contains("GHSA-xxxx-yyyy-zzzz"));
+        assert!(findings[0].message.contains("lodash"));
+        assert!(findings[0].suggestion.as_ref().unwrap().contains("4.17.21"));
+    }
+
+    #[test]
+    fn test_osv_returns_malware() {
+        let server = MockServer::start();
+
+        server.mock(|when, then| {
+            when.method(POST).path("/v1/querybatch");
+            then.status(200)
+                .json_body(serde_json::json!({
+                    "results": [{
+                        "vulns": [{
+                            "id": "MAL-2024-1234",
+                            "summary": "Malicious package stealing credentials"
+                        }]
+                    }]
+                }));
+        });
+
+        let packages = vec![Package {
+            name: "evil-pkg".into(),
+            version: "1.0.0".into(),
+            ecosystem: parsers::Ecosystem::Npm,
+        }];
+
+        let findings = query_osv_batch_url(&packages, &server.url("/v1/querybatch")).unwrap();
+
+        assert_eq!(findings.len(), 1);
+        assert!(findings[0].rule_id.starts_with("DEPSEC-MAL:"));
+        assert_eq!(findings[0].severity, Severity::Critical);
+        assert!(findings[0].message.contains("MALICIOUS"));
+    }
+
+    #[test]
+    fn test_osv_no_vulns() {
+        let server = MockServer::start();
+
+        server.mock(|when, then| {
+            when.method(POST).path("/v1/querybatch");
+            then.status(200)
+                .json_body(serde_json::json!({
+                    "results": [{"vulns": []}]
+                }));
+        });
+
+        let packages = vec![Package {
+            name: "serde".into(),
+            version: "1.0.200".into(),
+            ecosystem: parsers::Ecosystem::CratesIo,
+        }];
+
+        let findings = query_osv_batch_url(&packages, &server.url("/v1/querybatch")).unwrap();
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn test_osv_empty_packages() {
+        let findings = query_osv_batch_url(&[], OSV_BATCH_URL).unwrap();
+        assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn test_osv_api_error() {
+        let server = MockServer::start();
+
+        server.mock(|when, then| {
+            when.method(POST).path("/v1/querybatch");
+            then.status(500).body("Internal Server Error");
+        });
+
+        let packages = vec![Package {
+            name: "test".into(),
+            version: "1.0".into(),
+            ecosystem: parsers::Ecosystem::Npm,
+        }];
+
+        let result = query_osv_batch_url(&packages, &server.url("/v1/querybatch"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_osv_multiple_vulns_same_package() {
+        let server = MockServer::start();
+
+        server.mock(|when, then| {
+            when.method(POST).path("/v1/querybatch");
+            then.status(200)
+                .json_body(serde_json::json!({
+                    "results": [{
+                        "vulns": [
+                            {"id": "GHSA-1111", "summary": "vuln1"},
+                            {"id": "GHSA-2222", "summary": "vuln2"}
+                        ]
+                    }]
+                }));
+        });
+
+        let packages = vec![Package {
+            name: "pkg".into(),
+            version: "1.0".into(),
+            ecosystem: parsers::Ecosystem::Npm,
+        }];
+
+        let findings = query_osv_batch_url(&packages, &server.url("/v1/querybatch")).unwrap();
+        assert_eq!(findings.len(), 2);
+    }
+
+    #[test]
+    fn test_extract_cvss_score_valid() {
+        let score = extract_cvss_score("CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H");
+        assert!(score.is_some());
+        assert!(score.unwrap() > 8.0);
+    }
+
+    #[test]
+    fn test_extract_cvss_score_invalid() {
+        assert!(extract_cvss_score("not-a-cvss").is_none());
     }
 }

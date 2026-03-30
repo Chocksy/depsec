@@ -682,4 +682,111 @@ mod tests {
         assert_eq!(capitalize("deps"), "Deps");
         assert_eq!(capitalize(""), "");
     }
+
+    #[test]
+    fn test_rule_info_known() {
+        let info = rule_info("DEPSEC-P001").unwrap();
+        assert_eq!(info.name, "Shell Execution");
+        assert!(!info.narrative.is_empty());
+    }
+
+    #[test]
+    fn test_rule_info_unknown() {
+        assert!(rule_info("UNKNOWN-RULE").is_none());
+    }
+
+    #[test]
+    fn test_rule_label_known() {
+        let label = rule_label("DEPSEC-P001");
+        assert_eq!(label, "P001: Shell Execution");
+    }
+
+    #[test]
+    fn test_rule_label_unknown() {
+        let label = rule_label("DEPSEC-X999");
+        assert_eq!(label, "X999");
+    }
+
+    #[test]
+    fn test_finding_passes_persona_no_confidence() {
+        let finding = Finding::new("DEPSEC-W001", Severity::High, "test");
+        // No confidence → always visible
+        assert!(finding_passes_persona(&finding, Persona::Regular));
+        assert!(finding_passes_persona(&finding, Persona::Pedantic));
+        assert!(finding_passes_persona(&finding, Persona::Auditor));
+    }
+
+    #[test]
+    fn test_finding_passes_persona_high_confidence() {
+        let finding = Finding::new("DEPSEC-P001", Severity::High, "test")
+            .with_confidence(Confidence::High);
+        assert!(finding_passes_persona(&finding, Persona::Regular));
+        assert!(finding_passes_persona(&finding, Persona::Pedantic));
+        assert!(finding_passes_persona(&finding, Persona::Auditor));
+    }
+
+    #[test]
+    fn test_finding_passes_persona_low_confidence() {
+        let finding = Finding::new("DEPSEC-P001", Severity::High, "test")
+            .with_confidence(Confidence::Low);
+        assert!(!finding_passes_persona(&finding, Persona::Regular));
+        assert!(!finding_passes_persona(&finding, Persona::Pedantic));
+        assert!(finding_passes_persona(&finding, Persona::Auditor));
+    }
+
+    #[test]
+    fn test_finding_passes_persona_medium_confidence() {
+        let finding = Finding::new("DEPSEC-P001", Severity::High, "test")
+            .with_confidence(Confidence::Medium);
+        assert!(!finding_passes_persona(&finding, Persona::Regular));
+        assert!(finding_passes_persona(&finding, Persona::Pedantic));
+        assert!(finding_passes_persona(&finding, Persona::Auditor));
+    }
+
+    #[test]
+    fn test_render_human_with_findings() {
+        let findings = vec![
+            Finding::new("DEPSEC-P001", Severity::High, "exec() call")
+                .with_file("node_modules/evil/index.js", 5)
+                .with_confidence(Confidence::High)
+                .with_package_name("evil"),
+        ];
+        let results = vec![
+            CheckResult::new("patterns", findings, 25.0, vec![]),
+            CheckResult::new("workflows", vec![], 25.0, vec!["All pinned".into()]),
+        ];
+        let report = ScanReport::new("test-app".into(), results);
+        let output = render_human(&report, false, Persona::Regular, false);
+        assert!(output.contains("test-app"));
+        // Finding is rendered with rule label (P001: Shell Execution), not raw message
+        assert!(output.contains("Shell Execution") || output.contains("P001"));
+        assert!(output.contains("All pinned"));
+    }
+
+    #[test]
+    fn test_render_human_verbose_shows_low_confidence() {
+        let findings = vec![
+            Finding::new("DEPSEC-P001", Severity::High, "low conf finding")
+                .with_confidence(Confidence::Low),
+        ];
+        let results = vec![CheckResult::new("patterns", findings, 25.0, vec![])];
+        let report = ScanReport::new("test".into(), results);
+
+        // Regular persona, no verbose — low confidence should be hidden
+        let output_regular = render_human(&report, false, Persona::Regular, false);
+        // Verbose — should show all
+        let output_verbose = render_human(&report, false, Persona::Regular, true);
+
+        // The verbose output should include the finding; regular may not render it in findings section
+        assert!(output_verbose.contains("low conf finding"));
+    }
+
+    #[test]
+    fn test_finding_visible_api() {
+        let high = Finding::new("X", Severity::High, "t").with_confidence(Confidence::High);
+        let low = Finding::new("X", Severity::High, "t").with_confidence(Confidence::Low);
+        assert!(finding_visible(&high, Persona::Regular));
+        assert!(!finding_visible(&low, Persona::Regular));
+        assert!(finding_visible(&low, Persona::Auditor));
+    }
 }

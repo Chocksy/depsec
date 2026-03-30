@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::checks::Finding;
 use crate::config::TriageConfig;
-use crate::llm::{ChatMessage, LlmClient, TokenUsage};
+use crate::llm::{ChatMessage, LlmApi, TokenUsage};
 use crate::triage_cache;
 
 const SYSTEM_PROMPT: &str = r#"You are a security analyst triaging static analysis findings from a supply chain security scanner. Your job is to classify each finding as a True Positive (real vulnerability), False Positive (not a real issue), or Needs Investigation (insufficient context to decide).
@@ -200,7 +200,7 @@ pub fn dry_run_findings(findings: &[Finding], root: &Path, config: &TriageConfig
 pub fn triage_findings(
     findings: &[Finding],
     root: &Path,
-    client: &LlmClient,
+    client: &dyn LlmApi,
     config: &TriageConfig,
 ) -> Vec<(usize, TriageResult, TokenUsage)> {
     let mut results = Vec::new();
@@ -245,7 +245,7 @@ pub fn triage_findings(
             },
         ];
 
-        match client.chat_json::<TriageResult>(&messages) {
+        match crate::llm::chat_json::<TriageResult>(client, &messages) {
             Ok((mut result, usage)) => {
                 // Apply confidence threshold — below 0.5 is unreliable
                 if result.confidence < 0.5 {
@@ -352,4 +352,305 @@ pub fn render_triage_results(
     ));
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::checks::{Confidence, Finding, Severity};
+    use crate::llm::TokenUsage;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn setup_finding_dir() -> (TempDir, Finding) {
+        let dir = TempDir::new().unwrap();
+        let pkg_dir = dir.path().join("node_modules/test-pkg");
+        fs::create_dir_all(&pkg_dir).unwrap();
+
+        let mut lines = Vec::new();
+        lines.push("const cp = require('child_process');".to_string());
+        for i in 1..20 {
+            lines.push(format!("// line {i}"));
+        }
+        lines.push("cp.exec(userInput);".to_string()); // line 21
+        for i in 22..40 {
+            lines.push(format!("// line {i}"));
+        }
+
+        fs::write(pkg_dir.join("index.js"), lines.join("\n")).unwrap();
+
+        let finding = Finding::new("DEPSEC-P001", Severity::High, "exec() with variable input")
+            .with_file("node_modules/test-pkg/index.js", 21)
+            .with_confidence(Confidence::High)
+            .with_package_name("test-pkg");
+
+        (dir, finding)
+    }
+
+    #[test]
+    fn test_build_context_extracts_code() {
+        let (dir, finding) = setup_finding_dir();
+        let ctx = build_context(&finding, dir.path()).unwrap();
+
+        assert_eq!(ctx.package_name, "test-pkg");
+        assert_eq!(ctx.rule_id, "DEPSEC-P001");
+        assert_eq!(ctx.line_number, 21);
+        assert!(ctx.flagged_line.contains("cp.exec(userInput)"));
+        assert!(ctx.surrounding_code.contains("cp.exec(userInput)"));
+        assert!(ctx.imports.contains("require('child_process')"));
+    }
+
+    #[test]
+    fn test_build_context_returns_none_for_missing_file() {
+        let finding = Finding::new("DEPSEC-P001", Severity::High, "test")
+            .with_file("nonexistent/file.js", 1);
+        let dir = TempDir::new().unwrap();
+        assert!(build_context(&finding, dir.path()).is_none());
+    }
+
+    #[test]
+    fn test_build_context_returns_none_without_file() {
+        let finding = Finding::new("DEPSEC-P001", Severity::High, "test");
+        let dir = TempDir::new().unwrap();
+        assert!(build_context(&finding, dir.path()).is_none());
+    }
+
+    #[test]
+    fn test_build_user_prompt_format() {
+        let (dir, finding) = setup_finding_dir();
+        let ctx = build_context(&finding, dir.path()).unwrap();
+        let prompt = build_user_prompt(&ctx);
+
+        assert!(prompt.contains("## Finding to Triage"));
+        assert!(prompt.contains("DEPSEC-P001"));
+        assert!(prompt.contains("test-pkg"));
+        assert!(prompt.contains("Flagged Line"));
+        assert!(prompt.contains("Surrounding Code"));
+        assert!(prompt.contains("classification"));
+    }
+
+    #[test]
+    fn test_classification_display() {
+        assert_eq!(Classification::TruePositive.to_string(), "TRUE POSITIVE");
+        assert_eq!(Classification::FalsePositive.to_string(), "FALSE POSITIVE");
+        assert_eq!(
+            Classification::NeedsInvestigation.to_string(),
+            "NEEDS INVESTIGATION"
+        );
+    }
+
+    #[test]
+    fn test_classification_serde_roundtrip() {
+        let tp: Classification =
+            serde_json::from_str("\"TP\"").unwrap();
+        assert_eq!(tp, Classification::TruePositive);
+
+        let fp: Classification =
+            serde_json::from_str("\"FP\"").unwrap();
+        assert_eq!(fp, Classification::FalsePositive);
+
+        let ni: Classification =
+            serde_json::from_str("\"NI\"").unwrap();
+        assert_eq!(ni, Classification::NeedsInvestigation);
+    }
+
+    #[test]
+    fn test_render_triage_results_no_color() {
+        let findings = vec![
+            Finding::new("DEPSEC-P001", Severity::High, "exec() call")
+                .with_file("node_modules/evil/index.js", 5)
+                .with_package_name("evil"),
+        ];
+        let results = vec![(
+            0,
+            TriageResult {
+                classification: Classification::TruePositive,
+                confidence: 0.95,
+                reasoning: "Dangerous exec".into(),
+                recommendation: "Remove package".into(),
+            },
+            TokenUsage {
+                prompt_tokens: 100,
+                completion_tokens: 50,
+                total_tokens: 150,
+            },
+        )];
+
+        let output = render_triage_results(&findings, &results, false);
+        assert!(output.contains("TRUE POSITIVE"));
+        assert!(output.contains("evil"));
+        assert!(output.contains("Remove package"));
+        assert!(output.contains("1 true positive"));
+    }
+
+    #[test]
+    fn test_render_triage_results_mixed() {
+        let findings = vec![
+            Finding::new("DEPSEC-P001", Severity::High, "exec")
+                .with_package_name("bad-pkg"),
+            Finding::new("DEPSEC-P001", Severity::High, "exec")
+                .with_package_name("safe-pkg"),
+        ];
+        let results = vec![
+            (
+                0,
+                TriageResult {
+                    classification: Classification::TruePositive,
+                    confidence: 0.9,
+                    reasoning: "bad".into(),
+                    recommendation: "remove".into(),
+                },
+                TokenUsage::default(),
+            ),
+            (
+                1,
+                TriageResult {
+                    classification: Classification::FalsePositive,
+                    confidence: 0.85,
+                    reasoning: "ok".into(),
+                    recommendation: "ignore".into(),
+                },
+                TokenUsage::default(),
+            ),
+        ];
+
+        let output = render_triage_results(&findings, &results, false);
+        assert!(output.contains("1 true positive"));
+        assert!(output.contains("1 false positive"));
+    }
+
+    // --- Mock-based tests for triage_findings ---
+    use crate::llm::{ChatResponse, MockLlmApi};
+
+    /// Create a unique finding to avoid cache collisions between parallel tests
+    fn unique_finding(dir: &TempDir, suffix: &str) -> Finding {
+        let pkg_dir = dir.path().join(format!("node_modules/test-pkg-{suffix}"));
+        fs::create_dir_all(&pkg_dir).unwrap();
+
+        let content = format!("const cp = require('child_process');\ncp.exec(userInput_{suffix});");
+        fs::write(pkg_dir.join("index.js"), &content).unwrap();
+
+        Finding::new("DEPSEC-P001", Severity::High, format!("exec-{suffix}"))
+            .with_file(format!("node_modules/test-pkg-{suffix}/index.js"), 2)
+            .with_confidence(Confidence::High)
+            .with_package_name(format!("test-pkg-{suffix}"))
+    }
+
+    fn mock_tp_response() -> ChatResponse {
+        ChatResponse {
+            content: r#"{"classification":"TP","confidence":0.95,"reasoning":"Dangerous exec with user input","recommendation":"Remove package"}"#.into(),
+            model: "test".into(),
+            usage: TokenUsage { prompt_tokens: 100, completion_tokens: 50, total_tokens: 150 },
+        }
+    }
+
+    fn mock_fp_response() -> ChatResponse {
+        ChatResponse {
+            content: r#"{"classification":"FP","confidence":0.85,"reasoning":"Static string, not user input","recommendation":"Safe to ignore"}"#.into(),
+            model: "test".into(),
+            usage: TokenUsage::default(),
+        }
+    }
+
+    #[test]
+    fn test_triage_findings_classifies_true_positive() {
+        let dir = TempDir::new().unwrap();
+        let finding = unique_finding(&dir, "tp1");
+
+        let mut mock = MockLlmApi::new();
+        mock.expect_chat()
+            .returning(|_| Ok(mock_tp_response()));
+
+        let config = TriageConfig::default();
+        let results = triage_findings(&[finding], dir.path(), &mock, &config);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].1.classification, Classification::TruePositive);
+        assert!(results[0].1.confidence > 0.9);
+    }
+
+    #[test]
+    fn test_triage_findings_classifies_false_positive() {
+        let dir = TempDir::new().unwrap();
+        let finding = unique_finding(&dir, "fp1");
+
+        let mut mock = MockLlmApi::new();
+        mock.expect_chat()
+            .returning(|_| Ok(mock_fp_response()));
+
+        let config = TriageConfig::default();
+        let results = triage_findings(&[finding], dir.path(), &mock, &config);
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].1.classification, Classification::FalsePositive);
+    }
+
+    #[test]
+    fn test_triage_findings_handles_llm_error() {
+        let dir = TempDir::new().unwrap();
+        let finding = unique_finding(&dir, "err1");
+
+        let mut mock = MockLlmApi::new();
+        mock.expect_chat()
+            .returning(|_| Err(anyhow::anyhow!("API timeout")));
+
+        let config = TriageConfig::default();
+        let results = triage_findings(&[finding], dir.path(), &mock, &config);
+
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn test_triage_findings_skips_no_context() {
+        let finding = Finding::new("DEPSEC-P001", Severity::High, "test");
+        let dir = TempDir::new().unwrap();
+
+        let mock = MockLlmApi::new();
+
+        let config = TriageConfig::default();
+        let results = triage_findings(&[finding], dir.path(), &mock, &config);
+
+        assert_eq!(results.len(), 0);
+    }
+
+    #[test]
+    fn test_triage_findings_respects_max_findings() {
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = TempDir::new().unwrap();
+        let finding1 = unique_finding(&dir, &format!("maxA{ts}"));
+        let finding2 = unique_finding(&dir, &format!("maxB{ts}"));
+
+        let mut mock = MockLlmApi::new();
+        mock.expect_chat()
+            .times(1)
+            .returning(|_| Ok(mock_tp_response()));
+
+        let mut config = TriageConfig::default();
+        config.max_findings = 1;
+        let results = triage_findings(&[finding1, finding2], dir.path(), &mock, &config);
+
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_triage_findings_handles_malformed_json() {
+        let dir = TempDir::new().unwrap();
+        let finding = unique_finding(&dir, "bad_json");
+
+        let mut mock = MockLlmApi::new();
+        mock.expect_chat()
+            .returning(|_| Ok(ChatResponse {
+                content: "not json at all".into(),
+                model: "test".into(),
+                usage: TokenUsage::default(),
+            }));
+
+        let config = TriageConfig::default();
+        let results = triage_findings(&[finding], dir.path(), &mock, &config);
+
+        assert_eq!(results.len(), 0);
+    }
 }

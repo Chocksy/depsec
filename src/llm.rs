@@ -59,10 +59,35 @@ pub struct TokenUsage {
     pub total_tokens: u32,
 }
 
+/// Trait for LLM API interaction — enables mocking in tests
+#[cfg_attr(test, mockall::automock)]
+pub trait LlmApi {
+    fn chat(&self, messages: &[ChatMessage]) -> Result<ChatResponse>;
+    fn model(&self) -> &str;
+    fn estimate_cost(&self, input_tokens: u32, output_tokens: u32) -> f64;
+}
+
+/// Send a chat request and parse the response as JSON.
+/// Free function (not on trait) because mockall can't handle generic methods.
+pub fn chat_json<T: serde::de::DeserializeOwned>(
+    client: &dyn LlmApi,
+    messages: &[ChatMessage],
+) -> Result<(T, TokenUsage)> {
+    let response = client.chat(messages)?;
+    let json_str = extract_json(&response.content).unwrap_or_else(|| response.content.clone());
+    let parsed: T = serde_json::from_str(&json_str).with_context(|| {
+        format!(
+            "Failed to parse LLM response as JSON: {}",
+            &json_str[..json_str.len().min(200)]
+        )
+    })?;
+    Ok((parsed, response.usage))
+}
+
 pub struct LlmClient {
     api_key: String,
     model: String,
-    base_url: String,
+    pub(crate) base_url: String,
     timeout_secs: u64,
 }
 
@@ -100,12 +125,8 @@ impl LlmClient {
         })
     }
 
-    pub fn model(&self) -> &str {
-        &self.model
-    }
-
     /// Send a chat completion request and return the response
-    pub fn chat(&self, messages: &[ChatMessage]) -> Result<ChatResponse> {
+    fn chat_impl(&self, messages: &[ChatMessage]) -> Result<ChatResponse> {
         let request = ChatRequest {
             model: self.model.clone(),
             messages: messages.to_vec(),
@@ -144,28 +165,8 @@ impl LlmClient {
         })
     }
 
-    /// Send a chat request and parse the response as JSON
-    pub fn chat_json<T: serde::de::DeserializeOwned>(
-        &self,
-        messages: &[ChatMessage],
-    ) -> Result<(T, TokenUsage)> {
-        let response = self.chat(messages)?;
-
-        // Try to extract JSON from the response — handle markdown code blocks
-        let json_str = extract_json(&response.content).unwrap_or_else(|| response.content.clone());
-
-        let parsed: T = serde_json::from_str(&json_str).with_context(|| {
-            format!(
-                "Failed to parse LLM response as JSON: {}",
-                &json_str[..json_str.len().min(200)]
-            )
-        })?;
-
-        Ok((parsed, response.usage))
-    }
-
     /// Rough cost estimate in USD based on model pricing
-    pub fn estimate_cost(&self, input_tokens: u32, output_tokens: u32) -> f64 {
+    fn estimate_cost_impl(&self, input_tokens: u32, output_tokens: u32) -> f64 {
         // Approximate pricing per 1M tokens (as of 2026)
         let (input_per_m, output_per_m) = match self.model.as_str() {
             m if m.contains("claude-sonnet") => (3.0, 15.0),
@@ -177,6 +178,20 @@ impl LlmClient {
 
         (input_tokens as f64 / 1_000_000.0) * input_per_m
             + (output_tokens as f64 / 1_000_000.0) * output_per_m
+    }
+}
+
+impl LlmApi for LlmClient {
+    fn chat(&self, messages: &[ChatMessage]) -> Result<ChatResponse> {
+        self.chat_impl(messages)
+    }
+
+    fn model(&self) -> &str {
+        &self.model
+    }
+
+    fn estimate_cost(&self, input_tokens: u32, output_tokens: u32) -> f64 {
+        self.estimate_cost_impl(input_tokens, output_tokens)
     }
 }
 
@@ -277,15 +292,125 @@ mod tests {
             timeout_secs: 60,
         };
         // 1000 input + 500 output tokens
-        let cost = client.estimate_cost(1000, 500);
+        let cost = LlmApi::estimate_cost(&client, 1000, 500);
         assert!(cost > 0.0);
         assert!(cost < 0.02); // Should be fractions of a cent for small requests
     }
 
     #[test]
     fn test_from_env_missing() {
-        // When OPENROUTER_API_KEY is not set, should return None
         std::env::remove_var("OPENROUTER_API_KEY");
         assert!(LlmClient::from_env().is_none());
+    }
+
+    // --- httpmock tests for LlmClient ---
+    use httpmock::prelude::*;
+
+    fn test_client(base_url: &str) -> LlmClient {
+        LlmClient {
+            api_key: "test-key".into(),
+            model: "test-model".into(),
+            base_url: base_url.into(),
+            timeout_secs: 5,
+        }
+    }
+
+    #[test]
+    fn test_chat_parses_response() {
+        let server = MockServer::start();
+
+        server.mock(|when, then| {
+            when.method(POST).path("/chat/completions");
+            then.status(200)
+                .json_body(serde_json::json!({
+                    "choices": [{"message": {"content": "Hello!"}}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                    "model": "test-model"
+                }));
+        });
+
+        let client = test_client(&server.url(""));
+        let response = client.chat(&[ChatMessage { role: "user".into(), content: "Hi".into() }]).unwrap();
+        assert_eq!(response.content, "Hello!");
+        assert_eq!(response.usage.total_tokens, 15);
+    }
+
+    #[test]
+    fn test_chat_handles_api_error() {
+        let server = MockServer::start();
+
+        server.mock(|when, then| {
+            when.method(POST).path("/chat/completions");
+            then.status(500).body("Internal Server Error");
+        });
+
+        let client = test_client(&server.url(""));
+        let result = client.chat(&[ChatMessage { role: "user".into(), content: "Hi".into() }]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_chat_json_parses_json_response() {
+        let server = MockServer::start();
+
+        server.mock(|when, then| {
+            when.method(POST).path("/chat/completions");
+            then.status(200)
+                .json_body(serde_json::json!({
+                    "choices": [{"message": {"content": "{\"value\": 42}"}}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+                }));
+        });
+
+        let client = test_client(&server.url(""));
+        let (parsed, usage): (serde_json::Value, _) = chat_json(
+            &client,
+            &[ChatMessage { role: "user".into(), content: "give json".into() }],
+        ).unwrap();
+
+        assert_eq!(parsed["value"], 42);
+        assert_eq!(usage.total_tokens, 15);
+    }
+
+    #[test]
+    fn test_chat_json_handles_markdown_wrapped() {
+        let server = MockServer::start();
+
+        server.mock(|when, then| {
+            when.method(POST).path("/chat/completions");
+            then.status(200)
+                .json_body(serde_json::json!({
+                    "choices": [{"message": {"content": "```json\n{\"value\": 99}\n```"}}],
+                    "usage": {}
+                }));
+        });
+
+        let client = test_client(&server.url(""));
+        let (parsed, _): (serde_json::Value, _) = chat_json(
+            &client,
+            &[ChatMessage { role: "user".into(), content: "test".into() }],
+        ).unwrap();
+
+        assert_eq!(parsed["value"], 99);
+    }
+
+    #[test]
+    fn test_estimate_cost_models() {
+        let haiku = LlmClient { api_key: "t".into(), model: "claude-haiku-x".into(), base_url: "".into(), timeout_secs: 1 };
+        let opus = LlmClient { api_key: "t".into(), model: "claude-opus-x".into(), base_url: "".into(), timeout_secs: 1 };
+        let gpt = LlmClient { api_key: "t".into(), model: "gpt-4o-mini".into(), base_url: "".into(), timeout_secs: 1 };
+
+        let h_cost = LlmApi::estimate_cost(&haiku, 1000, 500);
+        let o_cost = LlmApi::estimate_cost(&opus, 1000, 500);
+        let g_cost = LlmApi::estimate_cost(&gpt, 1000, 500);
+
+        assert!(o_cost > h_cost); // Opus should be more expensive
+        assert!(g_cost > h_cost); // GPT-4o more than Haiku
+    }
+
+    #[test]
+    fn test_extract_json_preamble() {
+        let input = "Here is my analysis:\n{\"result\": true}";
+        assert_eq!(extract_json(input), Some("{\"result\": true}".to_string()));
     }
 }

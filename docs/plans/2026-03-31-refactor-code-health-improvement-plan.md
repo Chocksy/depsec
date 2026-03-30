@@ -115,9 +115,9 @@ impl Finding {
 Reduces 10-line Finding construction to 3-4 lines.
 
 **Acceptance criteria:**
-- [ ] `src/utils.rs` with shared entropy/mask/truncate functions
-- [ ] Finding builder pattern reduces construction boilerplate
-- [ ] Zero duplicated functions across codebase
+- [x] `src/utils.rs` with shared entropy/mask/truncate functions
+- [x] Finding builder pattern reduces construction boilerplate
+- [x] Zero duplicated functions across codebase
 
 ## Phase 3: Improve Test Coverage (44% → 70%+)
 
@@ -134,8 +134,8 @@ Priority by impact (modules with 0% or <30% coverage):
 | `output.rs` | 47% | 60%+ | Rendering functions, aggregation, glossary |
 
 **Acceptance criteria:**
-- [ ] Overall coverage ≥ 70%
-- [ ] No module at 0% coverage
+- [ ] Overall coverage ≥ 70% (currently 55% — remaining gap is I/O-heavy code: LLM calls, network APIs, process spawning)
+- [x] No module at 0% coverage
 - [ ] Coverage report in CI (cargo-tarpaulin in GitHub Actions)
 
 ## Phase 4: Code Organization
@@ -202,7 +202,7 @@ Add to `.github/workflows/ci.yml`:
 
 **Acceptance criteria:**
 - [ ] Coverage report generated in CI
-- [ ] Unused dependencies detected and removed
+- [x] Unused dependencies detected and removed
 - [ ] Binary bloat analysis run once
 
 ## Phase 6: README Update

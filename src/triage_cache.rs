@@ -152,18 +152,10 @@ mod tests {
     use crate::triage::Classification;
 
     fn test_finding() -> Finding {
-        Finding {
-            rule_id: "DEPSEC-P001".into(),
-            severity: Severity::High,
-            confidence: Some(Confidence::High),
-            message: "test finding".into(),
-            file: Some("node_modules/test-pkg/index.js".into()),
-            line: Some(10),
-            suggestion: None,
-            package: Some("test-pkg".into()),
-            reachable: None,
-            auto_fixable: false,
-        }
+        Finding::new("DEPSEC-P001", Severity::High, "test finding")
+            .with_file("node_modules/test-pkg/index.js", 10)
+            .with_confidence(Confidence::High)
+            .with_package_name("test-pkg")
     }
 
     #[test]
@@ -222,5 +214,54 @@ mod tests {
         let cached = cached.unwrap();
         assert_eq!(cached.classification, Classification::FalsePositive);
         assert_eq!(cached.confidence, 0.95);
+    }
+
+    #[test]
+    fn test_cache_miss_no_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let finding = test_finding();
+        let cached = get_cached(&finding, dir.path(), 30);
+        assert!(cached.is_none());
+    }
+
+    #[test]
+    fn test_cache_stats_empty() {
+        // Stats when cache dir might not exist
+        let (count, size) = cache_stats();
+        // May be zero or non-zero depending on prior test runs, just don't panic
+        let _ = (count, size);
+    }
+
+    #[test]
+    fn test_set_cached_no_key() {
+        // Finding without file → no cache key → silent OK
+        let finding = Finding::new("DEPSEC-P001", Severity::High, "test");
+        let result = TriageResult {
+            classification: Classification::TruePositive,
+            confidence: 0.9,
+            reasoning: "test".into(),
+            recommendation: "test".into(),
+        };
+        let dir = tempfile::TempDir::new().unwrap();
+        assert!(set_cached(&finding, dir.path(), &result).is_ok());
+    }
+
+    #[test]
+    fn test_cache_key_no_file_field() {
+        let finding = Finding::new("DEPSEC-P001", Severity::High, "test");
+        assert!(cache_key(&finding, Path::new("/tmp")).is_none());
+    }
+
+    #[test]
+    fn test_cache_key_no_line_field() {
+        let finding = Finding::new("DEPSEC-P001", Severity::High, "test")
+            .with_file_only("some/file.js");
+        assert!(cache_key(&finding, Path::new("/tmp")).is_none());
+    }
+
+    #[test]
+    fn test_dirs_or_default() {
+        let dir = dirs_or_default();
+        assert!(dir.to_string_lossy().contains("depsec"));
     }
 }

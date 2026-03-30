@@ -326,18 +326,11 @@ fn check_package_json_scripts(root: &Path, findings: &mut Vec<Finding>) {
     let hooks = ["preinstall", "postinstall", "install"];
     for hook in &hooks {
         if let Some(script) = scripts.get(*hook).and_then(|s| s.as_str()) {
-            findings.push(Finding {
-                rule_id: "DEPSEC-PF001".into(),
-                severity: Severity::Medium,
-                message: format!("Install script '{hook}': {script}"),
-                file: Some("package.json".into()),
-                line: None,
-                suggestion: Some(format!(
-                    "Review the '{hook}' script — install hooks run automatically during npm install"
-                )),
-                confidence: None, package: None, reachable: None,
-                auto_fixable: false,
-            });
+            findings.push(
+                Finding::new("DEPSEC-PF001", Severity::Medium, format!("Install script '{hook}': {script}"))
+                    .with_file_only("package.json")
+                    .with_suggestion(format!("Review the '{hook}' script — install hooks run automatically during npm install")),
+            );
         }
     }
 }
@@ -358,22 +351,13 @@ fn check_typosquatting(pkg: &parsers::Package, findings: &mut Vec<Finding>) {
     for &top_pkg in popular {
         let distance = levenshtein(&pkg.name, top_pkg);
         if distance > 0 && distance <= 2 {
-            findings.push(Finding {
-                rule_id: "DEPSEC-T001".into(),
-                severity: Severity::High,
-                message: format!(
+            findings.push(
+                Finding::new("DEPSEC-T001", Severity::High, format!(
                     "Possible typosquat: '{}' is similar to popular package '{top_pkg}' (distance: {distance})",
                     pkg.name
-                ),
-                file: None,
-                line: None,
-                suggestion: Some(format!(
-                    "Verify you intended to install '{}' and not '{top_pkg}'",
-                    pkg.name
-                )),
-                confidence: None, package: None, reachable: None,
-                auto_fixable: false,
-            });
+                ))
+                    .with_suggestion(format!("Verify you intended to install '{}' and not '{top_pkg}'", pkg.name)),
+            );
             break; // One match per package is enough
         }
     }
@@ -425,18 +409,13 @@ fn check_lockfile_hashes(root: &Path, findings: &mut Vec<Finding>) {
                         .count();
 
                     if missing_hash > 0 {
-                        findings.push(Finding {
-                            rule_id: "DEPSEC-T007".into(),
-                            severity: Severity::Medium,
-                            message: format!(
+                        findings.push(
+                            Finding::new("DEPSEC-T007", Severity::Medium, format!(
                                 "{missing_hash} packages in package-lock.json missing integrity hashes"
-                            ),
-                            file: Some("package-lock.json".into()),
-                            line: None,
-                            suggestion: Some("Regenerate lockfile with 'npm install' to add integrity hashes".into()),
-                            confidence: None, package: None, reachable: None,
-                auto_fixable: false,
-                        });
+                            ))
+                                .with_file_only("package-lock.json")
+                                .with_suggestion("Regenerate lockfile with 'npm install' to add integrity hashes"),
+                        );
                     }
                 }
             }
@@ -480,25 +459,13 @@ fn check_package_metadata(packages: &[parsers::Package], findings: &mut Vec<Find
         // Check publish date — flag packages published very recently
         if let Some(published) = body.get("publishedAt").and_then(|p| p.as_str()) {
             if is_recently_published(published, 7) {
-                findings.push(Finding {
-                    rule_id: "DEPSEC-T002".into(),
-                    severity: Severity::Medium,
-                    message: format!(
+                findings.push(
+                    Finding::new("DEPSEC-T002", Severity::Medium, format!(
                         "Package {} {} was published recently ({})",
-                        pkg.name,
-                        pkg.version,
-                        &published[..10_usize.min(published.len())]
-                    ),
-                    file: None,
-                    line: None,
-                    suggestion: Some(
-                        "Newly published packages near popular names may be typosquats".into(),
-                    ),
-                    confidence: None,
-                    package: None,
-                    reachable: None,
-                    auto_fixable: false,
-                });
+                        pkg.name, pkg.version, &published[..10_usize.min(published.len())]
+                    ))
+                        .with_suggestion("Newly published packages near popular names may be typosquats"),
+                );
             }
         }
 
@@ -514,21 +481,13 @@ fn check_package_metadata(packages: &[parsers::Package], findings: &mut Vec<Find
             .unwrap_or(false);
 
         if !has_source {
-            findings.push(Finding {
-                rule_id: "DEPSEC-T004".into(),
-                severity: Severity::Low,
-                message: format!(
+            findings.push(
+                Finding::new("DEPSEC-T004", Severity::Low, format!(
                     "Package {} {} has no linked source repository",
                     pkg.name, pkg.version
-                ),
-                file: None,
-                line: None,
-                suggestion: Some("Packages without source repos are harder to audit".into()),
-                confidence: None,
-                package: None,
-                reachable: None,
-                auto_fixable: false,
-            });
+                ))
+                    .with_suggestion("Packages without source repos are harder to audit"),
+            );
         }
     }
 }

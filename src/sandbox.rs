@@ -256,4 +256,28 @@ mod tests {
         // Random nonexistent command should not
         assert!(!is_available("depsec_nonexistent_test_cmd_12345"));
     }
+
+    #[test]
+    fn test_detect_docker_image() {
+        assert_eq!(detect_docker_image(&["npm".into()]), "node:22-slim");
+        assert_eq!(detect_docker_image(&["yarn".into()]), "node:22-slim");
+        assert_eq!(detect_docker_image(&["pip".into()]), "python:3.12-slim");
+        assert_eq!(detect_docker_image(&["cargo".into()]), "rust:slim");
+        assert_eq!(detect_docker_image(&["go".into()]), "golang:1.22-alpine");
+        assert_eq!(detect_docker_image(&["bundle".into()]), "ruby:3.3-slim");
+        assert_eq!(detect_docker_image(&["unknown".into()]), "node:22-slim");
+        assert_eq!(detect_docker_image(&[]), "node:22-slim");
+    }
+
+    #[test]
+    fn test_detect_sandbox_unknown_preference() {
+        assert_eq!(detect_sandbox("invalid"), SandboxType::None);
+    }
+
+    #[test]
+    fn test_run_sandboxed_none_errors() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let result = run_sandboxed(&["echo".into(), "hi".into()], dir.path(), &SandboxType::None);
+        assert!(result.is_err());
+    }
 }

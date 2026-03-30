@@ -128,18 +128,12 @@ fn check_action_pinning(content: &str, file: &str, findings: &mut Vec<Finding>) 
                 continue;
             }
 
-            findings.push(Finding {
-                rule_id: "DEPSEC-W001".into(),
-                severity: Severity::High,
-                message: format!("Action not pinned to commit SHA: {action_ref}"),
-                file: Some(file.into()),
-                line: Some(line_num + 1),
-                suggestion: Some("Pin to a full commit SHA instead of a tag".into()),
-                confidence: None,
-                package: None,
-                reachable: None,
-                auto_fixable: true,
-            });
+            findings.push(
+                Finding::new("DEPSEC-W001", Severity::High, format!("Action not pinned to commit SHA: {action_ref}"))
+                    .with_file(file, line_num + 1)
+                    .with_suggestion("Pin to a full commit SHA instead of a tag")
+                    .auto_fixable(),
+            );
         }
     }
 }
@@ -163,33 +157,17 @@ fn check_permissions(content: &str, file: &str, findings: &mut Vec<Finding>) {
     }
 
     if !has_permissions {
-        findings.push(Finding {
-            rule_id: "DEPSEC-W002".into(),
-            severity: Severity::Medium,
-            message: "No top-level permissions block — defaults to write-all".into(),
-            file: Some(file.into()),
-            line: None,
-            suggestion: Some(
-                "Add 'permissions: {}' for read-only, or specify minimal permissions".into(),
-            ),
-            confidence: None,
-            package: None,
-            reachable: None,
-            auto_fixable: false,
-        });
+        findings.push(
+            Finding::new("DEPSEC-W002", Severity::Medium, "No top-level permissions block — defaults to write-all")
+                .with_file_only(file)
+                .with_suggestion("Add 'permissions: {}' for read-only, or specify minimal permissions"),
+        );
     } else if is_write_all {
-        findings.push(Finding {
-            rule_id: "DEPSEC-W002".into(),
-            severity: Severity::Medium,
-            message: "Workflow permissions set to write-all".into(),
-            file: Some(file.into()),
-            line: None,
-            suggestion: Some("Set minimal permissions per job instead of write-all".into()),
-            confidence: None,
-            package: None,
-            reachable: None,
-            auto_fixable: false,
-        });
+        findings.push(
+            Finding::new("DEPSEC-W002", Severity::Medium, "Workflow permissions set to write-all")
+                .with_file_only(file)
+                .with_suggestion("Set minimal permissions per job instead of write-all"),
+        );
     }
 }
 
@@ -207,20 +185,11 @@ fn check_pull_request_target(content: &str, file: &str, findings: &mut Vec<Findi
             continue;
         }
         if checkout_re.is_match(line) {
-            findings.push(Finding {
-                rule_id: "DEPSEC-W003".into(),
-                severity: Severity::Critical,
-                message: "pull_request_target with actions/checkout detected (code injection risk)"
-                    .into(),
-                file: Some(file.into()),
-                line: Some(line_num + 1),
-                suggestion: Some(
-                    "Use pull_request instead, or avoid checking out PR code in pull_request_target"
-                        .into(),
-                ),
-                confidence: None, package: None, reachable: None,
-                auto_fixable: false,
-            });
+            findings.push(
+                Finding::new("DEPSEC-W003", Severity::Critical, "pull_request_target with actions/checkout detected (code injection risk)")
+                    .with_file(file, line_num + 1)
+                    .with_suggestion("Use pull_request instead, or avoid checking out PR code in pull_request_target"),
+            );
         }
     }
 }
@@ -269,21 +238,11 @@ fn check_line_for_injection(line: &str, line_num: usize, file: &str, findings: &
         let pattern_spaced = format!("${{{{ {expr}");
         let pattern_compact = format!("${{{{{expr}");
         if line.contains(&pattern_spaced) || line.contains(&pattern_compact) {
-            findings.push(Finding {
-                rule_id: "DEPSEC-W004".into(),
-                severity: Severity::Critical,
-                message: format!("User-controlled expression in run block: ${{{{ {expr} }}}}"),
-                file: Some(file.into()),
-                line: Some(line_num + 1),
-                suggestion: Some(
-                    "Pass the value through an environment variable instead of inline expansion"
-                        .into(),
-                ),
-                confidence: None,
-                package: None,
-                reachable: None,
-                auto_fixable: false,
-            });
+            findings.push(
+                Finding::new("DEPSEC-W004", Severity::Critical, format!("User-controlled expression in run block: ${{{{ {expr} }}}}"))
+                    .with_file(file, line_num + 1)
+                    .with_suggestion("Pass the value through an environment variable instead of inline expansion"),
+            );
         }
     }
 }
@@ -295,33 +254,19 @@ fn check_dangerous_git_flags(content: &str, file: &str, findings: &mut Vec<Findi
 
     for (line_num, line) in content.lines().enumerate() {
         if git_noverify.is_match(line) {
-            findings.push(Finding {
-                rule_id: "DEPSEC-W005".into(),
-                severity: Severity::Medium,
-                message: "git --no-verify flag skips pre-commit hooks".into(),
-                file: Some(file.into()),
-                line: Some(line_num + 1),
-                suggestion: Some("Remove --no-verify to ensure hooks run".into()),
-                confidence: None,
-                package: None,
-                reachable: None,
-                auto_fixable: false,
-            });
+            findings.push(
+                Finding::new("DEPSEC-W005", Severity::Medium, "git --no-verify flag skips pre-commit hooks")
+                    .with_file(file, line_num + 1)
+                    .with_suggestion("Remove --no-verify to ensure hooks run"),
+            );
         }
 
         if git_force.is_match(line) {
-            findings.push(Finding {
-                rule_id: "DEPSEC-W005".into(),
-                severity: Severity::Medium,
-                message: "git push --force can overwrite remote history".into(),
-                file: Some(file.into()),
-                line: Some(line_num + 1),
-                suggestion: Some("Use --force-with-lease instead of --force".into()),
-                confidence: None,
-                package: None,
-                reachable: None,
-                auto_fixable: false,
-            });
+            findings.push(
+                Finding::new("DEPSEC-W005", Severity::Medium, "git push --force can overwrite remote history")
+                    .with_file(file, line_num + 1)
+                    .with_suggestion("Use --force-with-lease instead of --force"),
+            );
         }
     }
 }

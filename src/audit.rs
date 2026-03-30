@@ -5,7 +5,7 @@ use anyhow::{bail, Result};
 
 use crate::ast::AstAnalyzer;
 use crate::config::TriageConfig;
-use crate::llm::{ChatMessage, LlmClient};
+use crate::llm::{ChatMessage, LlmApi};
 
 /// Package profile gathered during reconnaissance
 #[derive(Debug)]
@@ -362,7 +362,7 @@ struct LlmFinding {
 /// Run the deep audit on a package
 pub fn run_audit(
     profile: &PackageProfile,
-    client: &LlmClient,
+    client: &dyn LlmApi,
     _config: &TriageConfig,
     dry_run: bool,
 ) -> Result<AuditResult> {
@@ -434,7 +434,7 @@ Analyze this package for security vulnerabilities. Focus on:
         },
     ];
 
-    match client.chat_json::<LlmAuditResponse>(&messages) {
+    match crate::llm::chat_json::<LlmAuditResponse>(client, &messages) {
         Ok((response, usage)) => {
             total_tokens += usage.total_tokens;
 
@@ -508,7 +508,7 @@ Respond with JSON: {{"verdict": "CONFIRMED|DEBUNKED", "reasoning": "..."}}"#,
                 reasoning: String,
             }
 
-            match client.chat_json::<VerifyResponse>(&messages) {
+            match crate::llm::chat_json::<VerifyResponse>(client, &messages) {
                 Ok((verify, usage)) => {
                     total_tokens += usage.total_tokens;
                     if verify.verdict.to_uppercase().contains("CONFIRMED") {

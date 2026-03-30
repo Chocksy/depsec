@@ -192,21 +192,11 @@ impl Check for SecretsCheck {
                 for (sp, re) in &compiled_patterns {
                     if re.is_match(line) {
                         let masked = mask_secret(line, re);
-                        findings.push(Finding {
-                            rule_id: sp.rule_id.into(),
-                            severity: sp.severity,
-                            message: format!("{} detected: {masked}", sp.name),
-                            file: Some(rel_path.clone()),
-                            line: Some(line_num + 1),
-                            suggestion: Some(format!(
-                                "Remove {} and use environment variables instead",
-                                sp.name
-                            )),
-                            confidence: None,
-                            package: None,
-                            reachable: None,
-                            auto_fixable: false,
-                        });
+                        findings.push(
+                            Finding::new(sp.rule_id, sp.severity, format!("{} detected: {masked}", sp.name))
+                                .with_file(&rel_path, line_num + 1)
+                                .with_suggestion(format!("Remove {} and use environment variables instead", sp.name)),
+                        );
                     }
                 }
             }

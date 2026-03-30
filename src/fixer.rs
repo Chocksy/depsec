@@ -280,6 +280,65 @@ jobs:
     #[test]
     fn test_print_fix_results_empty() {
         print_fix_results(&[], false);
-        // Should not panic
+    }
+
+    #[test]
+    fn test_print_fix_results_mixed() {
+        let results = vec![
+            FixResult { file: "ci.yml".into(), action: "actions/checkout".into(), old_ref: "v4".into(), new_sha: "abc123".into(), applied: true },
+            FixResult { file: "ci.yml".into(), action: "actions/setup-node".into(), old_ref: "v3".into(), new_sha: "".into(), applied: false },
+        ];
+        print_fix_results(&results, false);
+        print_fix_results(&results, true);
+    }
+
+    #[test]
+    fn test_fix_file_no_actions() {
+        let content = "name: CI\non: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n";
+        let (new_content, results) = fix_file_pinning(content, "ci.yml").unwrap();
+        assert!(results.is_empty());
+        assert!(new_content.contains("ubuntu-latest"));
+    }
+
+    #[test]
+    fn test_fix_file_preserves_non_action_lines() {
+        let content = "name: CI\nenv:\n  NODE_VERSION: 18\n";
+        let (new_content, _) = fix_file_pinning(content, "ci.yml").unwrap();
+        assert!(new_content.contains("NODE_VERSION: 18"));
+    }
+
+    #[test]
+    fn test_fix_file_skips_no_at_sign() {
+        let content = "    steps:\n      - uses: ./local\n";
+        let (_, results) = fix_file_pinning(content, "ci.yml").unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_fix_workflow_pinning_no_dir() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let results = fix_workflow_pinning(dir.path(), false).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_fix_workflow_pinning_empty_dir() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join(".github/workflows")).unwrap();
+        let results = fix_workflow_pinning(dir.path(), false).unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_fix_workflow_pinning_already_pinned() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let wf_dir = dir.path().join(".github/workflows");
+        std::fs::create_dir_all(&wf_dir).unwrap();
+        std::fs::write(
+            wf_dir.join("ci.yml"),
+            "steps:\n  - uses: actions/checkout@a5ac7e51b41094c92402da3b24376905380afc29\n"
+        ).unwrap();
+        let results = fix_workflow_pinning(dir.path(), false).unwrap();
+        assert!(results.is_empty());
     }
 }

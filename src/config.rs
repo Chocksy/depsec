@@ -242,4 +242,86 @@ skip_dirs = ["custom-cache"]
         assert!(config.patterns.allow.is_empty());
         assert!(config.patterns.skip_dirs.is_empty());
     }
+
+    #[test]
+    fn test_load_config_no_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let config = load_config(dir.path());
+        assert_eq!(config.scoring.workflows, 25);
+    }
+
+    #[test]
+    fn test_load_config_with_file() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("depsec.toml"),
+            "[scoring]\nworkflows = 50\n",
+        )
+        .unwrap();
+        let config = load_config(dir.path());
+        assert_eq!(config.scoring.workflows, 50);
+    }
+
+    #[test]
+    fn test_load_config_invalid_toml() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::write(dir.path().join("depsec.toml"), "{{invalid toml}}").unwrap();
+        let config = load_config(dir.path());
+        // Should fall back to defaults
+        assert_eq!(config.scoring.workflows, 25);
+    }
+
+    #[test]
+    fn test_default_triage_config() {
+        let config = TriageConfig::default();
+        assert_eq!(config.api_key_env, "OPENROUTER_API_KEY");
+        assert_eq!(config.model, "anthropic/claude-sonnet-4-6");
+        assert_eq!(config.max_findings, 50);
+        assert_eq!(config.timeout_seconds, 60);
+        assert_eq!(config.cache_ttl_days, 30);
+    }
+
+    #[test]
+    fn test_default_install_config() {
+        let config = InstallConfig::default();
+        assert_eq!(config.mode, "monitor");
+        assert!(config.preflight);
+        assert!(!config.attestation);
+        assert_eq!(config.sandbox, "none");
+        assert!(config.watch_paths.is_empty());
+    }
+
+    #[test]
+    fn test_parse_triage_config() {
+        let toml_str = r#"
+[triage]
+api_key_env = "MY_KEY"
+model = "gpt-4o"
+max_findings = 10
+timeout_seconds = 30
+cache_ttl_days = 7
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.triage.api_key_env, "MY_KEY");
+        assert_eq!(config.triage.model, "gpt-4o");
+        assert_eq!(config.triage.max_findings, 10);
+    }
+
+    #[test]
+    fn test_parse_install_config() {
+        let toml_str = r#"
+[install]
+mode = "sandbox"
+preflight = false
+attestation = true
+sandbox = "docker"
+watch_paths = ["~/.npmrc"]
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.install.mode, "sandbox");
+        assert!(!config.install.preflight);
+        assert!(config.install.attestation);
+        assert_eq!(config.install.sandbox, "docker");
+        assert_eq!(config.install.watch_paths, vec!["~/.npmrc"]);
+    }
 }

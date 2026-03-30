@@ -106,18 +106,12 @@ mod tests {
     fn test_sarif_with_findings() {
         use crate::checks::{CheckResult, Finding};
 
-        let findings = vec![Finding {
-            rule_id: "DEPSEC-W001".into(),
-            severity: Severity::High,
-            message: "Unpinned action".into(),
-            file: Some(".github/workflows/ci.yml".into()),
-            line: Some(10),
-            suggestion: Some("Pin to SHA".into()),
-            confidence: None,
-            package: None,
-            reachable: None,
-            auto_fixable: true,
-        }];
+        let findings = vec![
+            Finding::new("DEPSEC-W001", Severity::High, "Unpinned action")
+                .with_file(".github/workflows/ci.yml", 10)
+                .with_suggestion("Pin to SHA")
+                .auto_fixable(),
+        ];
 
         let results = vec![CheckResult::new("workflows", findings, 25.0, vec![])];
         let report = ScanReport::new("test".into(), results);
