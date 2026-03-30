@@ -19,6 +19,7 @@ mod selfcheck;
 mod shellhook;
 mod triage;
 mod triage_cache;
+mod watchdog;
 
 use std::path::PathBuf;
 use std::process::ExitCode;

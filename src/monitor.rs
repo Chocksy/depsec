@@ -27,6 +27,8 @@ pub struct MonitorResult {
     pub expected: Vec<Connection>,
     pub unexpected: Vec<Connection>,
     pub critical: Vec<Connection>,
+    pub file_alerts: Vec<crate::watchdog::FileAlert>,
+    pub write_violations: Vec<crate::watchdog::WriteViolation>,
 }
 
 /// Known-malicious IPs that are always flagged
@@ -100,15 +102,59 @@ pub fn run_monitor(
         poll_connections(child_pid, &conn_clone, &seen_clone, &running_clone);
     });
 
+    // Start file access watchdog in a parallel thread
+    let file_alerts: Arc<Mutex<Vec<crate::watchdog::FileAlert>>> = Arc::new(Mutex::new(Vec::new()));
+    let write_violations: Arc<Mutex<Vec<crate::watchdog::WriteViolation>>> =
+        Arc::new(Mutex::new(Vec::new()));
+    let running_watchdog = running.clone();
+    let alerts_clone = file_alerts.clone();
+    let violations_clone = write_violations.clone();
+
+    let sensitive_paths = crate::watchdog::build_sensitive_paths(&[]);
+    let project_root = std::env::current_dir().unwrap_or_default();
+    let allowed_write_dirs: Vec<std::path::PathBuf> = vec![
+        project_root.join("node_modules"),
+        project_root.join("vendor"),
+        project_root.join(".venv"),
+        std::env::temp_dir(),
+    ];
+
+    let watchdog_handle = std::thread::spawn(move || {
+        let mut seen_alerts = std::collections::HashSet::new();
+        let mut seen_violations = std::collections::HashSet::new();
+
+        while running_watchdog.load(std::sync::atomic::Ordering::Relaxed) {
+            let new_alerts =
+                crate::watchdog::check_process_files(child_pid, &sensitive_paths, &mut seen_alerts);
+            if !new_alerts.is_empty() {
+                alerts_clone.lock().unwrap().extend(new_alerts);
+            }
+
+            let new_violations = crate::watchdog::check_write_boundaries(
+                child_pid,
+                &allowed_write_dirs,
+                &mut seen_violations,
+            );
+            if !new_violations.is_empty() {
+                violations_clone.lock().unwrap().extend(new_violations);
+            }
+
+            std::thread::sleep(Duration::from_millis(POLL_INTERVAL_MS));
+        }
+    });
+
     // Wait for the child to finish
     let status = child.wait().context("Failed to wait for child process")?;
     let duration = start.elapsed();
 
-    // Stop the polling thread
+    // Stop both polling threads
     running.store(false, std::sync::atomic::Ordering::Relaxed);
     let _ = poll_handle.join();
+    let _ = watchdog_handle.join();
 
     let all_connections = connections.lock().unwrap().clone();
+    let all_file_alerts = file_alerts.lock().unwrap().clone();
+    let all_write_violations = write_violations.lock().unwrap().clone();
 
     // Load baseline for comparison
     let user_baseline = baseline_path
@@ -156,6 +202,8 @@ pub fn run_monitor(
         expected,
         unexpected,
         critical,
+        file_alerts: all_file_alerts,
+        write_violations: all_write_violations,
     };
 
     if json_output {
@@ -411,12 +459,54 @@ fn print_monitor_result(result: &MonitorResult) {
         );
     }
 
+    // File access alerts
+    println!("\n[File Access]");
+    if result.file_alerts.is_empty() {
+        println!("  \x1b[32m✓\x1b[0m No sensitive files accessed");
+    } else {
+        for alert in &result.file_alerts {
+            println!(
+                "  \x1b[31m🔴 READ {}\x1b[0m — by {} (pid {})",
+                alert.path, alert.process_name, alert.pid
+            );
+        }
+    }
+
+    // Write boundary violations
+    if !result.write_violations.is_empty() {
+        println!("\n[Write Boundary]");
+        for violation in &result.write_violations {
+            println!(
+                "  \x1b[31m⚠ WRITE outside expected dirs: {}\x1b[0m — by {} (pid {})",
+                violation.path, violation.process_name, violation.pid
+            );
+        }
+    }
+
     println!();
     let total = result.connections.len();
     let bad = result.unexpected.len() + result.critical.len();
-    if bad > 0 {
-        println!("{total} connections monitored, \x1b[31m{bad} unexpected\x1b[0m.");
+    let file_issues = result.file_alerts.len() + result.write_violations.len();
+
+    if bad > 0 || file_issues > 0 {
+        print!("{total} connections monitored");
+        if bad > 0 {
+            print!(", \x1b[31m{bad} unexpected\x1b[0m");
+        }
+        if !result.file_alerts.is_empty() {
+            print!(
+                ", \x1b[31m{} sensitive file reads\x1b[0m",
+                result.file_alerts.len()
+            );
+        }
+        if !result.write_violations.is_empty() {
+            print!(
+                ", \x1b[31m{} write violations\x1b[0m",
+                result.write_violations.len()
+            );
+        }
+        println!(".");
     } else {
-        println!("{total} connections monitored, all expected.");
+        println!("{total} connections monitored, all expected. No file access issues.");
     }
 }
