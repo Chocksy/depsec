@@ -12,6 +12,8 @@ mod parsers;
 mod preflight;
 mod reachability;
 mod rules;
+#[allow(dead_code)]
+mod sandbox;
 mod sarif;
 mod scanner;
 mod scorecard;
