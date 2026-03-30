@@ -22,7 +22,7 @@ const SECRET_PATTERNS: &[SecretPattern] = &[
     SecretPattern {
         rule_id: "DEPSEC-S002",
         name: "AWS Secret Key",
-        pattern: r#"(?i)aws_secret_access_key\s*[:=]\s*['"]?[A-Za-z0-9/+=]{40}"#,
+        pattern: r#"(?i)aws_secret_access_key\s*[=:].*?['"]?[A-Za-z0-9/+=]{40}"#,
         severity: Severity::Critical,
     },
     SecretPattern {
@@ -70,13 +70,17 @@ const SECRET_PATTERNS: &[SecretPattern] = &[
     SecretPattern {
         rule_id: "DEPSEC-S010",
         name: "Generic API Key",
-        pattern: r#"(?i)(api[_\-]?key|api[_\-]?secret)\s*[:=]\s*['"][A-Za-z0-9]{20,}['"]"#,
+        // Allows type annotations between name and value (e.g., API_KEY: string = "value")
+        // Expanded character class includes _-/+= for base64 and URL-safe secrets
+        pattern: r#"(?i)(api[_\-]?key|api[_\-]?secret)\s*[=:].*?['"][A-Za-z0-9_\-/+=]{20,}['"]"#,
         severity: Severity::High,
     },
     SecretPattern {
         rule_id: "DEPSEC-S011",
         name: "Generic Secret",
-        pattern: r#"(?i)(secret[_\-]?key|client[_\-]?secret)\s*[:=]\s*['"][A-Za-z0-9]{20,}['"]"#,
+        // Allows type annotations between name and value (e.g., CLIENT_SECRET: &str = "value")
+        // Expanded character class includes _-/+= for base64 and URL-safe secrets
+        pattern: r#"(?i)(secret[_\-]?key|client[_\-]?secret)\s*[=:].*?['"][A-Za-z0-9_\-/+=]{20,}['"]"#,
         severity: Severity::High,
     },
     SecretPattern {
@@ -491,5 +495,64 @@ mod tests {
         assert!(glob_matches("tests/fixtures/test.txt", "tests/fixtures/*"));
         assert!(glob_matches("src/deep/file.rs", "**/*.rs"));
         assert!(glob_matches("file.pem", "*.pem"));
+    }
+
+    #[test]
+    fn test_rust_typed_secret_detected() {
+        // Rust syntax: CLIENT_SECRET: &str = "value" — has type annotation between name and =
+        let dir = setup_project(&[(
+            "auth.rs",
+            // gitleaks:allow — this is a test fixture, not a real secret
+            r#"const CLIENT_SECRET: &str = "1PHTn28JDE1H5_NTwbN7Anmsf8klxwKc_g5ScKdOUU2qV-EthOGCZUI6OKeVFoihWSS7lvKQC-vhadk6ChFomw";"#,
+        )]);
+        let config = Config::default();
+        let ctx = ScanContext {
+            root: dir.path(),
+            config: &config,
+        };
+        let result = SecretsCheck.run(&ctx).unwrap();
+        assert!(
+            result.findings.iter().any(|f| f.rule_id == "DEPSEC-S011"),
+            "Should detect CLIENT_SECRET with Rust type annotation"
+        );
+    }
+
+    #[test]
+    fn test_secret_with_special_chars_detected() {
+        // Secrets containing underscores, dashes, slashes, plus, equals (base64 alphabet)
+        let dir = setup_project(&[(
+            "config.js",
+            // gitleaks:allow — this is a test fixture, not a real secret
+            r#"const CLIENT_SECRET = "abc_DEF-123/GHI+jkl=MNO_pqr-STU/vwx+yz0";"#,
+        )]);
+        let config = Config::default();
+        let ctx = ScanContext {
+            root: dir.path(),
+            config: &config,
+        };
+        let result = SecretsCheck.run(&ctx).unwrap();
+        assert!(
+            result.findings.iter().any(|f| f.rule_id == "DEPSEC-S011"),
+            "Should detect secrets with base64/URL-safe characters"
+        );
+    }
+
+    #[test]
+    fn test_api_key_with_type_annotation() {
+        // TypeScript: const API_KEY: string = "value"
+        let dir = setup_project(&[(
+            "config.ts",
+            r#"const API_KEY: string = "abcdefghijklmnopqrstuvwxyz1234567890";"#,
+        )]);
+        let config = Config::default();
+        let ctx = ScanContext {
+            root: dir.path(),
+            config: &config,
+        };
+        let result = SecretsCheck.run(&ctx).unwrap();
+        assert!(
+            result.findings.iter().any(|f| f.rule_id == "DEPSEC-S010"),
+            "Should detect API_KEY with TypeScript type annotation"
+        );
     }
 }

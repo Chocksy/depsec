@@ -1,1 +1,3 @@
 src/checks/secrets.rs:stripe-access-token:424
+src/checks/secrets.rs:generic-client-secret:506
+src/checks/secrets.rs:generic-client-secret:526
