@@ -2,8 +2,9 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// Sensitive paths that should never be accessed by package install scripts
-const SENSITIVE_PATHS: &[&str] = &[
+/// Sensitive paths that should never be accessed by package install scripts.
+/// Shared between watchdog (detection) and sandbox (prevention).
+pub const SENSITIVE_PATHS: &[&str] = &[
     ".ssh",
     ".aws",
     ".gnupg",
@@ -117,6 +118,11 @@ pub fn check_write_boundaries(
     }
 
     violations
+}
+
+/// Public API for process tree (used by monitor for PID filtering)
+pub fn get_process_tree_pub(root_pid: u32) -> Vec<u32> {
+    get_process_tree(root_pid)
 }
 
 /// Get all PIDs in the process tree rooted at `root_pid` (recursive BFS — finds grandchildren)

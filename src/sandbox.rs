@@ -89,19 +89,21 @@ pub fn run_sandboxed(
 fn run_bubblewrap(args: &[String], project_dir: &Path) -> Result<SandboxResult> {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/root".into());
 
+    // Use unified sensitive paths from watchdog
+    let sensitive_dirs: Vec<String> = crate::watchdog::SENSITIVE_PATHS
+        .iter()
+        .map(|p| format!("{home}/{p}"))
+        .collect();
+
     let mut cmd = Command::new("bwrap");
+    cmd.args(["--ro-bind", "/", "/", "--tmpfs", "/tmp"]);
+
+    // Mask ALL sensitive dirs with tmpfs (unified with watchdog)
+    for dir in &sensitive_dirs {
+        cmd.args(["--tmpfs", dir]);
+    }
+
     cmd.args([
-        "--ro-bind",
-        "/",
-        "/",
-        "--tmpfs",
-        "/tmp",
-        "--tmpfs",
-        &format!("{home}/.ssh"),
-        "--tmpfs",
-        &format!("{home}/.aws"),
-        "--tmpfs",
-        &format!("{home}/.gnupg"),
         "--bind",
         &project_dir.to_string_lossy(),
         &project_dir.to_string_lossy(),
@@ -129,18 +131,20 @@ fn run_bubblewrap(args: &[String], project_dir: &Path) -> Result<SandboxResult> 
 fn run_sandbox_exec(args: &[String], project_dir: &Path) -> Result<SandboxResult> {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/user".into());
 
-    // Sandbox profile: deny sensitive reads, allow everything else
+    // Deny-by-default sandbox profile — block ALL sensitive path reads
+    let mut deny_rules = String::new();
+    for path in crate::watchdog::SENSITIVE_PATHS {
+        deny_rules.push_str(&format!("(deny file-read* (subpath \"{home}/{path}\"))\n"));
+    }
+
     let profile = format!(
         r#"(version 1)
 (allow default)
-(deny file-read* (subpath "{home}/.ssh"))
-(deny file-read* (subpath "{home}/.aws"))
-(deny file-read* (subpath "{home}/.gnupg"))
-(deny file-read* (subpath "{home}/.npmrc"))
+{deny_rules}
 (allow file-write* (subpath "{project_dir}"))
 (allow file-write* (subpath "/tmp"))
 (allow file-write* (subpath "/private/tmp"))"#,
-        home = home,
+        deny_rules = deny_rules,
         project_dir = project_dir.display(),
     );
 
@@ -160,6 +164,9 @@ fn run_sandbox_exec(args: &[String], project_dir: &Path) -> Result<SandboxResult
 
 /// Run in Docker container
 fn run_docker(args: &[String], project_dir: &Path) -> Result<SandboxResult> {
+    // Auto-detect Docker image based on package manager
+    let image = detect_docker_image(args);
+
     let mut docker_args = vec![
         "run".to_string(),
         "--rm".to_string(),
@@ -167,7 +174,7 @@ fn run_docker(args: &[String], project_dir: &Path) -> Result<SandboxResult> {
         format!("{}:/app:rw", project_dir.display()),
         "-w".to_string(),
         "/app".to_string(),
-        "node:22-slim".to_string(),
+        image,
     ];
     docker_args.extend(args.iter().cloned());
 
@@ -181,6 +188,19 @@ fn run_docker(args: &[String], project_dir: &Path) -> Result<SandboxResult> {
         exit_code: status.code().unwrap_or(-1),
         success: status.success(),
     })
+}
+
+/// Auto-detect Docker image based on the package manager command
+fn detect_docker_image(args: &[String]) -> String {
+    let cmd = args.first().map(|s| s.as_str()).unwrap_or("");
+    match cmd {
+        "npm" | "npx" | "yarn" | "pnpm" => "node:22-slim".into(),
+        "pip" | "pip3" | "python" | "python3" | "uv" => "python:3.12-slim".into(),
+        "cargo" => "rust:slim".into(),
+        "go" => "golang:1.22-alpine".into(),
+        "bundle" | "gem" => "ruby:3.3-slim".into(),
+        _ => "node:22-slim".into(), // Default fallback
+    }
 }
 
 /// Check if a command is available on PATH

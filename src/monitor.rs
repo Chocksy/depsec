@@ -110,7 +110,10 @@ pub fn run_monitor(
     let alerts_clone = file_alerts.clone();
     let violations_clone = write_violations.clone();
 
-    let sensitive_paths = crate::watchdog::build_sensitive_paths(&[]);
+    // Load config for extra watch paths
+    let project_root_for_config = std::env::current_dir().unwrap_or_default();
+    let config = crate::config::load_config(&project_root_for_config);
+    let sensitive_paths = crate::watchdog::build_sensitive_paths(&config.install.watch_paths);
     let project_root = std::env::current_dir().unwrap_or_default();
     let allowed_write_dirs: Vec<std::path::PathBuf> = vec![
         project_root.join("node_modules"),
@@ -251,17 +254,27 @@ fn is_expected_connection(
 
 /// Poll network connections using ss (Linux) or lsof (macOS)
 fn poll_connections(
-    _child_pid: u32,
+    child_pid: u32,
     connections: &Arc<Mutex<Vec<Connection>>>,
     seen: &Arc<Mutex<HashSet<String>>>,
     running: &Arc<std::sync::atomic::AtomicBool>,
 ) {
     while running.load(std::sync::atomic::Ordering::Relaxed) {
+        // Get the full process tree for the child (includes grandchildren)
+        let child_pids: HashSet<u32> = crate::watchdog::get_process_tree_pub(child_pid)
+            .into_iter()
+            .collect();
+
         if let Ok(conns) = get_current_connections() {
             let mut seen_lock = seen.lock().unwrap();
             let mut conns_lock = connections.lock().unwrap();
 
             for conn in conns {
+                // Only track connections from the child process tree
+                if !child_pids.contains(&conn.pid) {
+                    continue;
+                }
+
                 let key = format!("{}:{}:{}", conn.remote_host, conn.remote_port, conn.pid);
                 if seen_lock.insert(key) {
                     conns_lock.push(conn);

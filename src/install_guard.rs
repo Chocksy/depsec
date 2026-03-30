@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 
 use crate::config::InstallConfig;
 use crate::monitor;
+use crate::sandbox;
 
 /// Run the install-guard pipeline: preflight → monitor (with watchdog) → report
 pub fn run_install_guard(
@@ -57,6 +58,31 @@ pub fn run_install_guard(
                 }
                 Err(e) => {
                     eprintln!("  \x1b[33m⚠\x1b[0m Preflight check failed: {e}");
+                }
+            }
+        }
+    }
+
+    // Phase 1.5: Optional sandbox pre-check
+    if config.mode == "sandbox" || config.sandbox == "auto" {
+        let sandbox_type = sandbox::detect_sandbox(&config.sandbox);
+        if sandbox_type != sandbox::SandboxType::None {
+            eprintln!(
+                "\x1b[1m[depsec install-guard]\x1b[0m Running sandbox pre-check ({sandbox_type})..."
+            );
+            match sandbox::run_sandboxed(args, root, &sandbox_type) {
+                Ok(result) => {
+                    if result.success {
+                        eprintln!("  \x1b[32m✓\x1b[0m Sandbox pre-check passed");
+                    } else {
+                        eprintln!(
+                            "  \x1b[31m⚠\x1b[0m Sandbox pre-check failed (exit code {})",
+                            result.exit_code
+                        );
+                    }
+                }
+                Err(e) => {
+                    eprintln!("  \x1b[33m⚠\x1b[0m Sandbox pre-check skipped: {e}");
                 }
             }
         }
