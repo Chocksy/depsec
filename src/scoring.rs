@@ -192,9 +192,12 @@ mod tests {
 
     #[test]
     fn test_total_score_partial() {
-        let results = vec![CheckResult::new("test", vec![
-            Finding::new("T1", Severity::Low, "minor issue"),
-        ], 25.0, vec![])];
+        let results = vec![CheckResult::new(
+            "test",
+            vec![Finding::new("T1", Severity::Low, "minor issue")],
+            25.0,
+            vec![],
+        )];
         let score = compute_total_score(&results);
         assert!(score < 100.0);
         assert!(score > 0.0);

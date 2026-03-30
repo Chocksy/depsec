@@ -718,8 +718,8 @@ mod tests {
 
     #[test]
     fn test_finding_passes_persona_high_confidence() {
-        let finding = Finding::new("DEPSEC-P001", Severity::High, "test")
-            .with_confidence(Confidence::High);
+        let finding =
+            Finding::new("DEPSEC-P001", Severity::High, "test").with_confidence(Confidence::High);
         assert!(finding_passes_persona(&finding, Persona::Regular));
         assert!(finding_passes_persona(&finding, Persona::Pedantic));
         assert!(finding_passes_persona(&finding, Persona::Auditor));
@@ -727,8 +727,8 @@ mod tests {
 
     #[test]
     fn test_finding_passes_persona_low_confidence() {
-        let finding = Finding::new("DEPSEC-P001", Severity::High, "test")
-            .with_confidence(Confidence::Low);
+        let finding =
+            Finding::new("DEPSEC-P001", Severity::High, "test").with_confidence(Confidence::Low);
         assert!(!finding_passes_persona(&finding, Persona::Regular));
         assert!(!finding_passes_persona(&finding, Persona::Pedantic));
         assert!(finding_passes_persona(&finding, Persona::Auditor));
@@ -736,8 +736,8 @@ mod tests {
 
     #[test]
     fn test_finding_passes_persona_medium_confidence() {
-        let finding = Finding::new("DEPSEC-P001", Severity::High, "test")
-            .with_confidence(Confidence::Medium);
+        let finding =
+            Finding::new("DEPSEC-P001", Severity::High, "test").with_confidence(Confidence::Medium);
         assert!(!finding_passes_persona(&finding, Persona::Regular));
         assert!(finding_passes_persona(&finding, Persona::Pedantic));
         assert!(finding_passes_persona(&finding, Persona::Auditor));
@@ -745,12 +745,10 @@ mod tests {
 
     #[test]
     fn test_render_human_with_findings() {
-        let findings = vec![
-            Finding::new("DEPSEC-P001", Severity::High, "exec() call")
-                .with_file("node_modules/evil/index.js", 5)
-                .with_confidence(Confidence::High)
-                .with_package_name("evil"),
-        ];
+        let findings = vec![Finding::new("DEPSEC-P001", Severity::High, "exec() call")
+            .with_file("node_modules/evil/index.js", 5)
+            .with_confidence(Confidence::High)
+            .with_package_name("evil")];
         let results = vec![
             CheckResult::new("patterns", findings, 25.0, vec![]),
             CheckResult::new("workflows", vec![], 25.0, vec!["All pinned".into()]),

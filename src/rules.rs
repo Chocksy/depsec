@@ -167,8 +167,12 @@ pub fn apply_rules(rules: &[RuleDef], root: &Path) -> Vec<Finding> {
                 for (line_num, line) in content.lines().enumerate() {
                     for re in &compiled_patterns {
                         if re.is_match(line) {
-                            let mut f = Finding::new(rule.id.clone(), rule.severity(), format!("{}: {}", rule.name, line.trim()))
-                                .with_file(&rel_path, line_num + 1);
+                            let mut f = Finding::new(
+                                rule.id.clone(),
+                                rule.severity(),
+                                format!("{}: {}", rule.name, line.trim()),
+                            )
+                            .with_file(&rel_path, line_num + 1);
                             if !rule.description.is_empty() {
                                 f = f.with_suggestion(rule.description.clone());
                             }

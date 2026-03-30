@@ -1,8 +1,8 @@
 use std::path::Path;
 use std::process::ExitCode;
 
-use crate::{config, llm, output, reachability, sarif, scanner, triage, Persona};
-use crate::llm::LlmApi; // trait import for .model() and .estimate_cost()
+use crate::llm::LlmApi;
+use crate::{config, llm, output, reachability, sarif, scanner, triage, Persona}; // trait import for .model() and .estimate_cost()
 
 pub struct ScanOpts<'a> {
     pub checks: Option<&'a [String]>,
@@ -30,7 +30,9 @@ pub fn run(root: &Path, opts: &ScanOpts) -> ExitCode {
                 }
             }
 
-            let fmt = opts.format.unwrap_or(if opts.json { "json" } else { "human" });
+            let fmt = opts
+                .format
+                .unwrap_or(if opts.json { "json" } else { "human" });
             match fmt {
                 "json" => match output::render_json(&report) {
                     Ok(json_str) => println!("{json_str}"),
@@ -87,12 +89,8 @@ pub fn run(root: &Path, opts: &ScanOpts) -> ExitCode {
                         est_cost,
                     );
 
-                    let results = triage::triage_findings(
-                        &visible_findings,
-                        root,
-                        &client,
-                        &config.triage,
-                    );
+                    let results =
+                        triage::triage_findings(&visible_findings, root, &client, &config.triage);
 
                     print!(
                         "{}",

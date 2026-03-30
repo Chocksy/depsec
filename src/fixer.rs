@@ -285,8 +285,20 @@ jobs:
     #[test]
     fn test_print_fix_results_mixed() {
         let results = vec![
-            FixResult { file: "ci.yml".into(), action: "actions/checkout".into(), old_ref: "v4".into(), new_sha: "abc123".into(), applied: true },
-            FixResult { file: "ci.yml".into(), action: "actions/setup-node".into(), old_ref: "v3".into(), new_sha: "".into(), applied: false },
+            FixResult {
+                file: "ci.yml".into(),
+                action: "actions/checkout".into(),
+                old_ref: "v4".into(),
+                new_sha: "abc123".into(),
+                applied: true,
+            },
+            FixResult {
+                file: "ci.yml".into(),
+                action: "actions/setup-node".into(),
+                old_ref: "v3".into(),
+                new_sha: "".into(),
+                applied: false,
+            },
         ];
         print_fix_results(&results, false);
         print_fix_results(&results, true);
@@ -336,8 +348,9 @@ jobs:
         std::fs::create_dir_all(&wf_dir).unwrap();
         std::fs::write(
             wf_dir.join("ci.yml"),
-            "steps:\n  - uses: actions/checkout@a5ac7e51b41094c92402da3b24376905380afc29\n"
-        ).unwrap();
+            "steps:\n  - uses: actions/checkout@a5ac7e51b41094c92402da3b24376905380afc29\n",
+        )
+        .unwrap();
         let results = fix_workflow_pinning(dir.path(), false).unwrap();
         assert!(results.is_empty());
     }

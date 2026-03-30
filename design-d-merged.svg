@@ -1,0 +1,112 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="560" height="340" viewBox="0 0 560 340">
+  <!-- Terminal window -->
+  <rect width="560" height="340" rx="8" fill="#1a1b26"/>
+
+  <!-- Title bar -->
+  <rect width="560" height="34" rx="8" fill="#16161e"/>
+  <rect x="0" y="26" width="560" height="8" fill="#16161e"/>
+  <circle cx="18" cy="17" r="6" fill="#ff5f57"/>
+  <circle cx="38" cy="17" r="6" fill="#febc2e"/>
+  <circle cx="58" cy="17" r="6" fill="#28c840"/>
+  <text x="280" y="21" font-size="12" fill="#565f89" font-family="SF Mono, Menlo, Consolas, monospace" text-anchor="middle">depsec scorecard</text>
+
+  <!-- Score section -->
+  <text x="28" y="68" font-size="10" fill="#565f89" font-family="SF Mono, Menlo, monospace" letter-spacing="2">SUPPLY CHAIN SECURITY</text>
+
+  <text x="28" y="106" font-size="38" fill="#9ece6a" font-family="SF Mono, Menlo, monospace" font-weight="700">A</text>
+  <text x="62" y="96" font-size="22" fill="#c0caf5" font-family="SF Mono, Menlo, monospace" font-weight="600">10.0</text>
+  <text x="118" y="96" font-size="12" fill="#565f89" font-family="SF Mono, Menlo, monospace">/10</text>
+
+  <text x="28" y="120" font-size="11" fill="#414868" font-family="SF Mono, Menlo, monospace">depsec v0.2.0 · 129 pkgs · 47 files · 46 rules</text>
+
+  <!-- Box top -->
+  <text x="28" y="146" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">┌───────────────┬──────────────────────────────┬───────┬────────┐</text>
+  <text x="28" y="161" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="42" y="161" font-size="10" fill="#565f89" font-family="SF Mono, Menlo, monospace" letter-spacing="1">CHECK</text>
+  <text x="152" y="161" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="328" y="161" font-size="10" fill="#565f89" font-family="SF Mono, Menlo, monospace" letter-spacing="1">PROGRESS</text>
+  <text x="420" y="161" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="432" y="161" font-size="10" fill="#565f89" font-family="SF Mono, Menlo, monospace" letter-spacing="1">PTS</text>
+  <text x="474" y="161" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="486" y="161" font-size="10" fill="#565f89" font-family="SF Mono, Menlo, monospace" letter-spacing="1">STATUS</text>
+  <text x="544" y="161" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="28" y="170" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">├───────────────┼──────────────────────────────┼───────┼────────┤</text>
+
+  <!-- Row 1: Workflows -->
+  <text x="28" y="188" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="38" y="188" font-size="12" fill="#c0caf5" font-family="SF Mono, Menlo, monospace"> Workflows</text>
+  <text x="152" y="188" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="160" y="188" font-size="12" fill="#9ece6a" font-family="SF Mono, Menlo, monospace"> ████████████████████████████</text>
+  <text x="420" y="188" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="430" y="188" font-size="12" fill="#c0caf5" font-family="SF Mono, Menlo, monospace"> 25/25</text>
+  <text x="474" y="188" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="492" y="188" font-size="12" fill="#9ece6a" font-family="SF Mono, Menlo, monospace">  ✓</text>
+  <text x="544" y="188" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+
+  <text x="28" y="200" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="38" y="200" font-size="10" fill="#414868" font-family="SF Mono, Menlo, monospace"> SHA pins, permissions, injection</text>
+  <text x="152" y="200" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="420" y="200" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="474" y="200" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="544" y="200" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+
+  <!-- Row 2: Dependencies -->
+  <text x="28" y="218" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="38" y="218" font-size="12" fill="#c0caf5" font-family="SF Mono, Menlo, monospace"> Dependencies</text>
+  <text x="152" y="218" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="160" y="218" font-size="12" fill="#9ece6a" font-family="SF Mono, Menlo, monospace"> ████████████████████████████</text>
+  <text x="420" y="218" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="430" y="218" font-size="12" fill="#c0caf5" font-family="SF Mono, Menlo, monospace"> 20/20</text>
+  <text x="474" y="218" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="492" y="218" font-size="12" fill="#9ece6a" font-family="SF Mono, Menlo, monospace">  ✓</text>
+  <text x="544" y="218" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+
+  <text x="28" y="230" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="38" y="230" font-size="10" fill="#414868" font-family="SF Mono, Menlo, monospace"> 129 pkgs via OSV, 0 vulns, 0 malware</text>
+  <text x="152" y="230" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="420" y="230" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="474" y="230" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="544" y="230" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+
+  <!-- Row 3: Secrets -->
+  <text x="28" y="248" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="38" y="248" font-size="12" fill="#c0caf5" font-family="SF Mono, Menlo, monospace"> Secrets</text>
+  <text x="152" y="248" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="160" y="248" font-size="12" fill="#9ece6a" font-family="SF Mono, Menlo, monospace"> ████████████████████████████</text>
+  <text x="420" y="248" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="430" y="248" font-size="12" fill="#c0caf5" font-family="SF Mono, Menlo, monospace"> 25/25</text>
+  <text x="474" y="248" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="492" y="248" font-size="12" fill="#9ece6a" font-family="SF Mono, Menlo, monospace">  ✓</text>
+  <text x="544" y="248" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+
+  <text x="28" y="260" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="38" y="260" font-size="10" fill="#414868" font-family="SF Mono, Menlo, monospace"> 20 patterns, 47 files scanned</text>
+  <text x="152" y="260" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="420" y="260" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="474" y="260" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="544" y="260" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+
+  <!-- Row 4: Hygiene -->
+  <text x="28" y="278" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="38" y="278" font-size="12" fill="#c0caf5" font-family="SF Mono, Menlo, monospace"> Hygiene</text>
+  <text x="152" y="278" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="160" y="278" font-size="12" fill="#9ece6a" font-family="SF Mono, Menlo, monospace"> ████████████████████████████</text>
+  <text x="420" y="278" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="430" y="278" font-size="12" fill="#c0caf5" font-family="SF Mono, Menlo, monospace"> 10/10</text>
+  <text x="474" y="278" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="492" y="278" font-size="12" fill="#9ece6a" font-family="SF Mono, Menlo, monospace">  ✓</text>
+  <text x="544" y="278" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+
+  <text x="28" y="290" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="38" y="290" font-size="10" fill="#414868" font-family="SF Mono, Menlo, monospace"> SECURITY.md, .gitignore, branch prot</text>
+  <text x="152" y="290" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="420" y="290" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="474" y="290" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+  <text x="544" y="290" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">│</text>
+
+  <!-- Box bottom -->
+  <text x="28" y="306" font-size="12" fill="#3b4261" font-family="SF Mono, Menlo, monospace">└───────────────┴──────────────────────────────┴───────┴────────┘</text>
+
+  <!-- Footer -->
+  <text x="28" y="330" font-size="10" fill="#3b4261" font-family="SF Mono, Menlo, monospace">github.com/chocksy/depsec                  Own your security</text>
+</svg>

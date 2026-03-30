@@ -86,9 +86,13 @@ fn check_lockfile_committed(ctx: &ScanContext, lockfiles: &[String], findings: &
             if out.status.success() {
                 // File IS ignored by git
                 findings.push(
-                    Finding::new("DEPSEC-D001", Severity::High, format!("Lockfile {lockfile} is gitignored — should be committed"))
-                        .with_file_only(lockfile.clone())
-                        .with_suggestion("Remove lockfile from .gitignore and commit it"),
+                    Finding::new(
+                        "DEPSEC-D001",
+                        Severity::High,
+                        format!("Lockfile {lockfile} is gitignored — should be committed"),
+                    )
+                    .with_file_only(lockfile.clone())
+                    .with_suggestion("Remove lockfile from .gitignore and commit it"),
                 );
             }
         }
@@ -194,8 +198,7 @@ fn query_osv_batch_url(packages: &[Package], osv_url: &str) -> anyhow::Result<Ve
                         };
 
                         all_findings.push(
-                            Finding::new(rule_id, severity, message)
-                                .with_suggestion(suggestion),
+                            Finding::new(rule_id, severity, message).with_suggestion(suggestion),
                         );
                     }
                 }
@@ -408,15 +411,14 @@ mod tests {
 
         server.mock(|when, then| {
             when.method(POST).path("/v1/querybatch");
-            then.status(200)
-                .json_body(serde_json::json!({
-                    "results": [{
-                        "vulns": [{
-                            "id": "MAL-2024-1234",
-                            "summary": "Malicious package stealing credentials"
-                        }]
+            then.status(200).json_body(serde_json::json!({
+                "results": [{
+                    "vulns": [{
+                        "id": "MAL-2024-1234",
+                        "summary": "Malicious package stealing credentials"
                     }]
-                }));
+                }]
+            }));
         });
 
         let packages = vec![Package {
@@ -439,10 +441,9 @@ mod tests {
 
         server.mock(|when, then| {
             when.method(POST).path("/v1/querybatch");
-            then.status(200)
-                .json_body(serde_json::json!({
-                    "results": [{"vulns": []}]
-                }));
+            then.status(200).json_body(serde_json::json!({
+                "results": [{"vulns": []}]
+            }));
         });
 
         let packages = vec![Package {
@@ -486,15 +487,14 @@ mod tests {
 
         server.mock(|when, then| {
             when.method(POST).path("/v1/querybatch");
-            then.status(200)
-                .json_body(serde_json::json!({
-                    "results": [{
-                        "vulns": [
-                            {"id": "GHSA-1111", "summary": "vuln1"},
-                            {"id": "GHSA-2222", "summary": "vuln2"}
-                        ]
-                    }]
-                }));
+            then.status(200).json_body(serde_json::json!({
+                "results": [{
+                    "vulns": [
+                        {"id": "GHSA-1111", "summary": "vuln1"},
+                        {"id": "GHSA-2222", "summary": "vuln2"}
+                    ]
+                }]
+            }));
         });
 
         let packages = vec![Package {

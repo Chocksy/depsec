@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="200" viewBox="0 0 480 200">
+  <!-- Background -->
+  <rect width="480" height="200" rx="10" fill="#0a0c10"/>
+  <rect width="480" height="200" rx="10" fill="none" stroke="#22c55e" stroke-width="1" stroke-opacity="0.3"/>
+
+  <!-- Top accent line -->
+  <rect x="0" y="0" width="480" height="3" rx="10" fill="#22c55e"/>
+
+  <!-- Score + Grade -->
+  <text x="32" y="48" font-size="32" fill="#f8fafc" font-family="SF Mono, Menlo, Consolas, monospace" font-weight="800">A</text>
+  <text x="62" y="48" font-size="14" fill="#64748b" font-family="SF Mono, Menlo, monospace" font-weight="400">10/10</text>
+  <text x="126" y="42" font-size="11" fill="#475569" font-family="Inter, system-ui, sans-serif">depsec v0.2.0</text>
+  <text x="126" y="56" font-size="10" fill="#334155" font-family="Inter, system-ui, sans-serif">Supply Chain Security Scanner</text>
+
+  <!-- Chips row -->
+  <rect x="320" y="28" width="60" height="22" rx="11" fill="#22c55e" fill-opacity="0.12"/>
+  <text x="350" y="43" font-size="10" fill="#22c55e" font-family="SF Mono, Menlo, monospace" font-weight="600" text-anchor="middle">0 vuln</text>
+
+  <rect x="388" y="28" width="68" height="22" rx="11" fill="#22c55e" fill-opacity="0.12"/>
+  <text x="422" y="43" font-size="10" fill="#22c55e" font-family="SF Mono, Menlo, monospace" font-weight="600" text-anchor="middle">0 secrets</text>
+
+  <!-- Divider -->
+  <line x1="24" y1="70" x2="456" y2="70" stroke="#1a1d2a" stroke-width="1"/>
+
+  <!-- Grid: 5 categories as compact rows -->
+  <!-- Workflows -->
+  <rect x="24" y="82" width="4" height="18" rx="2" fill="#22c55e"/>
+  <text x="38" y="96" font-size="12" fill="#cbd5e1" font-family="Inter, system-ui, sans-serif" font-weight="500">Workflows</text>
+  <rect x="160" y="88" width="140" height="5" rx="2.5" fill="#1a1d2a"/>
+  <rect x="160" y="88" width="140" height="5" rx="2.5" fill="#22c55e"/>
+  <text x="310" y="96" font-size="10" fill="#64748b" font-family="SF Mono, Menlo, monospace">25/25</text>
+  <text x="440" y="96" font-size="10" fill="#4ade80" font-family="Inter, system-ui, sans-serif" text-anchor="end">&#x2713; clean</text>
+
+  <!-- Dependencies -->
+  <rect x="24" y="106" width="4" height="18" rx="2" fill="#22c55e"/>
+  <text x="38" y="120" font-size="12" fill="#cbd5e1" font-family="Inter, system-ui, sans-serif" font-weight="500">Dependencies</text>
+  <rect x="160" y="112" width="140" height="5" rx="2.5" fill="#1a1d2a"/>
+  <rect x="160" y="112" width="140" height="5" rx="2.5" fill="#22c55e"/>
+  <text x="310" y="120" font-size="10" fill="#64748b" font-family="SF Mono, Menlo, monospace">20/20</text>
+  <text x="440" y="120" font-size="10" fill="#4ade80" font-family="Inter, system-ui, sans-serif" text-anchor="end">&#x2713; clean</text>
+
+  <!-- Patterns -->
+  <rect x="24" y="130" width="4" height="18" rx="2" fill="#22c55e"/>
+  <text x="38" y="144" font-size="12" fill="#cbd5e1" font-family="Inter, system-ui, sans-serif" font-weight="500">Patterns</text>
+  <rect x="160" y="136" width="140" height="5" rx="2.5" fill="#1a1d2a"/>
+  <rect x="160" y="136" width="140" height="5" rx="2.5" fill="#22c55e"/>
+  <text x="310" y="144" font-size="10" fill="#64748b" font-family="SF Mono, Menlo, monospace">10/10</text>
+  <text x="440" y="144" font-size="10" fill="#4ade80" font-family="Inter, system-ui, sans-serif" text-anchor="end">&#x2713; clean</text>
+
+  <!-- Secrets -->
+  <rect x="24" y="154" width="4" height="18" rx="2" fill="#22c55e"/>
+  <text x="38" y="168" font-size="12" fill="#cbd5e1" font-family="Inter, system-ui, sans-serif" font-weight="500">Secrets</text>
+  <rect x="160" y="160" width="140" height="5" rx="2.5" fill="#1a1d2a"/>
+  <rect x="160" y="160" width="140" height="5" rx="2.5" fill="#22c55e"/>
+  <text x="310" y="168" font-size="10" fill="#64748b" font-family="SF Mono, Menlo, monospace">25/25</text>
+  <text x="440" y="168" font-size="10" fill="#4ade80" font-family="Inter, system-ui, sans-serif" text-anchor="end">&#x2713; clean</text>
+
+  <!-- Hygiene -->
+  <rect x="24" y="178" width="4" height="18" rx="2" fill="#22c55e"/>
+  <text x="38" y="192" font-size="12" fill="#cbd5e1" font-family="Inter, system-ui, sans-serif" font-weight="500">Hygiene</text>
+  <rect x="160" y="184" width="140" height="5" rx="2.5" fill="#1a1d2a"/>
+  <rect x="160" y="184" width="140" height="5" rx="2.5" fill="#22c55e"/>
+  <text x="310" y="192" font-size="10" fill="#64748b" font-family="SF Mono, Menlo, monospace">10/10</text>
+  <text x="440" y="192" font-size="10" fill="#4ade80" font-family="Inter, system-ui, sans-serif" text-anchor="end">&#x2713; clean</text>
+</svg>

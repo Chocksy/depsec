@@ -244,34 +244,48 @@ fn check_secret_candidate(
         // HIGH: suspicious name + high entropy + long value
         let masked = mask_value(value);
         findings.push(
-            Finding::new("DEPSEC-S021", Severity::Critical, format!(
+            Finding::new(
+                "DEPSEC-S021",
+                Severity::Critical,
+                format!(
                 "{name} assigned high-entropy secret ({:.1} bits/char, {len} chars): \"{masked}\"",
                 entropy
-            ))
-                .with_file(file_path, line)
-                .with_confidence(crate::checks::Confidence::High)
-                .with_suggestion(format!("Move to environment variable: std::env::var(\"{name}\") or process.env.{name}")),
+            ),
+            )
+            .with_file(file_path, line)
+            .with_confidence(crate::checks::Confidence::High)
+            .with_suggestion(format!(
+                "Move to environment variable: std::env::var(\"{name}\") or process.env.{name}"
+            )),
         );
     } else if has_suspicious_name && len >= 8 {
         // MEDIUM: suspicious name + any value (even low entropy)
         let masked = mask_value(value);
         findings.push(
-            Finding::new("DEPSEC-S022", Severity::High, format!("{name} assigned potential secret ({len} chars): \"{masked}\""))
-                .with_file(file_path, line)
-                .with_confidence(crate::checks::Confidence::Medium)
-                .with_suggestion("Move to environment variable or config file"),
+            Finding::new(
+                "DEPSEC-S022",
+                Severity::High,
+                format!("{name} assigned potential secret ({len} chars): \"{masked}\""),
+            )
+            .with_file(file_path, line)
+            .with_confidence(crate::checks::Confidence::Medium)
+            .with_suggestion("Move to environment variable or config file"),
         );
     } else if entropy >= 4.5 && len >= 30 {
         // LOW: high entropy + long value, no name signal
         let masked = mask_value(value);
         findings.push(
-            Finding::new("DEPSEC-S023", Severity::Medium, format!(
+            Finding::new(
+                "DEPSEC-S023",
+                Severity::Medium,
+                format!(
                 "{name} assigned high-entropy string ({:.1} bits/char, {len} chars): \"{masked}\"",
                 entropy
-            ))
-                .with_file(file_path, line)
-                .with_confidence(crate::checks::Confidence::Low)
-                .with_suggestion("Review — may be a hardcoded secret, hash, or encoded data"),
+            ),
+            )
+            .with_file(file_path, line)
+            .with_confidence(crate::checks::Confidence::Low)
+            .with_suggestion("Review — may be a hardcoded secret, hash, or encoded data"),
         );
     }
 }

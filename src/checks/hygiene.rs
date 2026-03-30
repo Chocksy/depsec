@@ -77,9 +77,19 @@ fn check_gitignore(ctx: &ScanContext, findings: &mut Vec<Finding>, pass: &mut Ve
         pass.push(".gitignore covers sensitive patterns".into());
     } else {
         findings.push(
-            Finding::new("DEPSEC-H002", Severity::Low, format!(".gitignore missing sensitive patterns: {}", missing.join(", ")))
-                .with_file_only(".gitignore")
-                .with_suggestion(format!("Add these patterns to .gitignore: {}", missing.join(", "))),
+            Finding::new(
+                "DEPSEC-H002",
+                Severity::Low,
+                format!(
+                    ".gitignore missing sensitive patterns: {}",
+                    missing.join(", ")
+                ),
+            )
+            .with_file_only(".gitignore")
+            .with_suggestion(format!(
+                "Add these patterns to .gitignore: {}",
+                missing.join(", ")
+            )),
         );
     }
 }
@@ -123,9 +133,15 @@ fn check_lockfile_committed(
             if let Ok(out) = output {
                 if out.status.success() {
                     findings.push(
-                        Finding::new("DEPSEC-H003", Severity::High, format!("Lockfile {lockfile} is gitignored"))
-                            .with_file_only(lockfile.to_string())
-                            .with_suggestion(format!("Remove {lockfile} from .gitignore and commit it")),
+                        Finding::new(
+                            "DEPSEC-H003",
+                            Severity::High,
+                            format!("Lockfile {lockfile} is gitignored"),
+                        )
+                        .with_file_only(lockfile.to_string())
+                        .with_suggestion(format!(
+                            "Remove {lockfile} from .gitignore and commit it"
+                        )),
                     );
                 }
             }
@@ -181,8 +197,14 @@ fn check_branch_protection(ctx: &ScanContext, findings: &mut Vec<Finding>, pass:
         }
         Err(ureq::Error::Status(404, _)) => {
             findings.push(
-                Finding::new("DEPSEC-H004", Severity::Medium, "No branch protection on main")
-                    .with_suggestion(format!("Enable at https://github.com/{owner}/{repo}/settings/branches")),
+                Finding::new(
+                    "DEPSEC-H004",
+                    Severity::Medium,
+                    "No branch protection on main",
+                )
+                .with_suggestion(format!(
+                    "Enable at https://github.com/{owner}/{repo}/settings/branches"
+                )),
             );
         }
         Err(_) => {} // API error — skip silently

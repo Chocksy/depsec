@@ -460,11 +460,19 @@ fn check_package_metadata(packages: &[parsers::Package], findings: &mut Vec<Find
         if let Some(published) = body.get("publishedAt").and_then(|p| p.as_str()) {
             if is_recently_published(published, 7) {
                 findings.push(
-                    Finding::new("DEPSEC-T002", Severity::Medium, format!(
-                        "Package {} {} was published recently ({})",
-                        pkg.name, pkg.version, &published[..10_usize.min(published.len())]
-                    ))
-                        .with_suggestion("Newly published packages near popular names may be typosquats"),
+                    Finding::new(
+                        "DEPSEC-T002",
+                        Severity::Medium,
+                        format!(
+                            "Package {} {} was published recently ({})",
+                            pkg.name,
+                            pkg.version,
+                            &published[..10_usize.min(published.len())]
+                        ),
+                    )
+                    .with_suggestion(
+                        "Newly published packages near popular names may be typosquats",
+                    ),
                 );
             }
         }
@@ -482,11 +490,15 @@ fn check_package_metadata(packages: &[parsers::Package], findings: &mut Vec<Find
 
         if !has_source {
             findings.push(
-                Finding::new("DEPSEC-T004", Severity::Low, format!(
-                    "Package {} {} has no linked source repository",
-                    pkg.name, pkg.version
-                ))
-                    .with_suggestion("Packages without source repos are harder to audit"),
+                Finding::new(
+                    "DEPSEC-T004",
+                    Severity::Low,
+                    format!(
+                        "Package {} {} has no linked source repository",
+                        pkg.name, pkg.version
+                    ),
+                )
+                .with_suggestion("Packages without source repos are harder to audit"),
             );
         }
     }

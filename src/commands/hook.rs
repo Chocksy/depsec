@@ -13,10 +13,8 @@ pub fn install() -> ExitCode {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                let _ = std::fs::set_permissions(
-                    &hook_path,
-                    std::fs::Permissions::from_mode(0o755),
-                );
+                let _ =
+                    std::fs::set_permissions(&hook_path, std::fs::Permissions::from_mode(0o755));
             }
             println!("Installed pre-commit hook at .git/hooks/pre-commit");
             println!("Secrets will be checked on every commit.");

@@ -277,7 +277,11 @@ mod tests {
     #[test]
     fn test_run_sandboxed_none_errors() {
         let dir = tempfile::TempDir::new().unwrap();
-        let result = run_sandboxed(&["echo".into(), "hi".into()], dir.path(), &SandboxType::None);
+        let result = run_sandboxed(
+            &["echo".into(), "hi".into()],
+            dir.path(),
+            &SandboxType::None,
+        );
         assert!(result.is_err());
     }
 }

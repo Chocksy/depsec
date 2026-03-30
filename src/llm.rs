@@ -321,16 +321,20 @@ mod tests {
 
         server.mock(|when, then| {
             when.method(POST).path("/chat/completions");
-            then.status(200)
-                .json_body(serde_json::json!({
-                    "choices": [{"message": {"content": "Hello!"}}],
-                    "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
-                    "model": "test-model"
-                }));
+            then.status(200).json_body(serde_json::json!({
+                "choices": [{"message": {"content": "Hello!"}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                "model": "test-model"
+            }));
         });
 
         let client = test_client(&server.url(""));
-        let response = client.chat(&[ChatMessage { role: "user".into(), content: "Hi".into() }]).unwrap();
+        let response = client
+            .chat(&[ChatMessage {
+                role: "user".into(),
+                content: "Hi".into(),
+            }])
+            .unwrap();
         assert_eq!(response.content, "Hello!");
         assert_eq!(response.usage.total_tokens, 15);
     }
@@ -345,7 +349,10 @@ mod tests {
         });
 
         let client = test_client(&server.url(""));
-        let result = client.chat(&[ChatMessage { role: "user".into(), content: "Hi".into() }]);
+        let result = client.chat(&[ChatMessage {
+            role: "user".into(),
+            content: "Hi".into(),
+        }]);
         assert!(result.is_err());
     }
 
@@ -355,18 +362,21 @@ mod tests {
 
         server.mock(|when, then| {
             when.method(POST).path("/chat/completions");
-            then.status(200)
-                .json_body(serde_json::json!({
-                    "choices": [{"message": {"content": "{\"value\": 42}"}}],
-                    "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
-                }));
+            then.status(200).json_body(serde_json::json!({
+                "choices": [{"message": {"content": "{\"value\": 42}"}}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+            }));
         });
 
         let client = test_client(&server.url(""));
         let (parsed, usage): (serde_json::Value, _) = chat_json(
             &client,
-            &[ChatMessage { role: "user".into(), content: "give json".into() }],
-        ).unwrap();
+            &[ChatMessage {
+                role: "user".into(),
+                content: "give json".into(),
+            }],
+        )
+        .unwrap();
 
         assert_eq!(parsed["value"], 42);
         assert_eq!(usage.total_tokens, 15);
@@ -378,27 +388,45 @@ mod tests {
 
         server.mock(|when, then| {
             when.method(POST).path("/chat/completions");
-            then.status(200)
-                .json_body(serde_json::json!({
-                    "choices": [{"message": {"content": "```json\n{\"value\": 99}\n```"}}],
-                    "usage": {}
-                }));
+            then.status(200).json_body(serde_json::json!({
+                "choices": [{"message": {"content": "```json\n{\"value\": 99}\n```"}}],
+                "usage": {}
+            }));
         });
 
         let client = test_client(&server.url(""));
         let (parsed, _): (serde_json::Value, _) = chat_json(
             &client,
-            &[ChatMessage { role: "user".into(), content: "test".into() }],
-        ).unwrap();
+            &[ChatMessage {
+                role: "user".into(),
+                content: "test".into(),
+            }],
+        )
+        .unwrap();
 
         assert_eq!(parsed["value"], 99);
     }
 
     #[test]
     fn test_estimate_cost_models() {
-        let haiku = LlmClient { api_key: "t".into(), model: "claude-haiku-x".into(), base_url: "".into(), timeout_secs: 1 };
-        let opus = LlmClient { api_key: "t".into(), model: "claude-opus-x".into(), base_url: "".into(), timeout_secs: 1 };
-        let gpt = LlmClient { api_key: "t".into(), model: "gpt-4o-mini".into(), base_url: "".into(), timeout_secs: 1 };
+        let haiku = LlmClient {
+            api_key: "t".into(),
+            model: "claude-haiku-x".into(),
+            base_url: "".into(),
+            timeout_secs: 1,
+        };
+        let opus = LlmClient {
+            api_key: "t".into(),
+            model: "claude-opus-x".into(),
+            base_url: "".into(),
+            timeout_secs: 1,
+        };
+        let gpt = LlmClient {
+            api_key: "t".into(),
+            model: "gpt-4o-mini".into(),
+            base_url: "".into(),
+            timeout_secs: 1,
+        };
 
         let h_cost = LlmApi::estimate_cost(&haiku, 1000, 500);
         let o_cost = LlmApi::estimate_cost(&opus, 1000, 500);

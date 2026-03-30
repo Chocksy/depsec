@@ -1,9 +1,9 @@
 use std::path::Path;
 use std::process::ExitCode;
 
-use crate::{audit, config, llm};
 #[allow(unused_imports)]
 use crate::llm::LlmApi;
+use crate::{audit, config, llm};
 
 pub fn run(package: &str, root: &Path, dry_run: bool, color: bool) -> ExitCode {
     let config = config::load_config(root);

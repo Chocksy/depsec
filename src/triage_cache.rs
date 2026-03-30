@@ -254,8 +254,8 @@ mod tests {
 
     #[test]
     fn test_cache_key_no_line_field() {
-        let finding = Finding::new("DEPSEC-P001", Severity::High, "test")
-            .with_file_only("some/file.js");
+        let finding =
+            Finding::new("DEPSEC-P001", Severity::High, "test").with_file_only("some/file.js");
         assert!(cache_key(&finding, Path::new("/tmp")).is_none());
     }
 

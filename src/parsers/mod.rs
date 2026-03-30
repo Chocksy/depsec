@@ -125,9 +125,21 @@ mod tests {
     #[test]
     fn test_deduplicate_removes_dupes() {
         let packages = vec![
-            Package { name: "serde".into(), version: "1.0".into(), ecosystem: Ecosystem::CratesIo },
-            Package { name: "serde".into(), version: "1.0".into(), ecosystem: Ecosystem::CratesIo },
-            Package { name: "tokio".into(), version: "1.0".into(), ecosystem: Ecosystem::CratesIo },
+            Package {
+                name: "serde".into(),
+                version: "1.0".into(),
+                ecosystem: Ecosystem::CratesIo,
+            },
+            Package {
+                name: "serde".into(),
+                version: "1.0".into(),
+                ecosystem: Ecosystem::CratesIo,
+            },
+            Package {
+                name: "tokio".into(),
+                version: "1.0".into(),
+                ecosystem: Ecosystem::CratesIo,
+            },
         ];
         let result = deduplicate(packages);
         assert_eq!(result.len(), 2);
@@ -136,8 +148,16 @@ mod tests {
     #[test]
     fn test_deduplicate_keeps_different_versions() {
         let packages = vec![
-            Package { name: "serde".into(), version: "1.0".into(), ecosystem: Ecosystem::CratesIo },
-            Package { name: "serde".into(), version: "2.0".into(), ecosystem: Ecosystem::CratesIo },
+            Package {
+                name: "serde".into(),
+                version: "1.0".into(),
+                ecosystem: Ecosystem::CratesIo,
+            },
+            Package {
+                name: "serde".into(),
+                version: "2.0".into(),
+                ecosystem: Ecosystem::CratesIo,
+            },
         ];
         let result = deduplicate(packages);
         assert_eq!(result.len(), 2);
@@ -176,7 +196,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
         let dir = tempfile::TempDir::new().unwrap();
         let hidden = dir.path().join(".hidden");
         std::fs::create_dir_all(&hidden).unwrap();
-        std::fs::write(hidden.join("Cargo.lock"), "[[package]]\nname = \"x\"\nversion = \"1\"").unwrap();
+        std::fs::write(
+            hidden.join("Cargo.lock"),
+            "[[package]]\nname = \"x\"\nversion = \"1\"",
+        )
+        .unwrap();
         let results = parse_all_lockfiles(dir.path(), 3);
         assert!(results.is_empty());
     }

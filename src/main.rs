@@ -238,32 +238,55 @@ fn main() -> ExitCode {
 
     match cli.command {
         Commands::Scan {
-            path, checks, json, format, persona, verbose, triage, triage_dry_run,
+            path,
+            checks,
+            json,
+            format,
+            persona,
+            verbose,
+            triage,
+            triage_dry_run,
         } => {
-            let root = match canonicalize_or_exit(&path) { Ok(r) => r, Err(e) => return e };
-            commands::scan::run(&root, &commands::scan::ScanOpts {
-                checks: checks.as_deref(),
-                format: format.as_deref(),
-                json,
-                persona,
-                verbose,
-                triage,
-                triage_dry_run,
-                color,
-            })
+            let root = match canonicalize_or_exit(&path) {
+                Ok(r) => r,
+                Err(e) => return e,
+            };
+            commands::scan::run(
+                &root,
+                &commands::scan::ScanOpts {
+                    checks: checks.as_deref(),
+                    format: format.as_deref(),
+                    json,
+                    persona,
+                    verbose,
+                    triage,
+                    triage_dry_run,
+                    color,
+                },
+            )
         }
 
         Commands::Fix { path, dry_run } => {
-            let root = match canonicalize_or_exit(&path) { Ok(r) => r, Err(e) => return e };
+            let root = match canonicalize_or_exit(&path) {
+                Ok(r) => r,
+                Err(e) => return e,
+            };
             commands::misc::fix(&root, dry_run)
         }
 
-        Commands::Monitor { learn, strict, json, baseline, command } => {
-            commands::misc::monitor_cmd(&command, baseline.as_deref(), learn, json, strict)
-        }
+        Commands::Monitor {
+            learn,
+            strict,
+            json,
+            baseline,
+            command,
+        } => commands::misc::monitor_cmd(&command, baseline.as_deref(), learn, json, strict),
 
         Commands::Preflight { path, json } => {
-            let root = match canonicalize_or_exit(&path) { Ok(r) => r, Err(e) => return e };
+            let root = match canonicalize_or_exit(&path) {
+                Ok(r) => r,
+                Err(e) => return e,
+            };
             commands::misc::preflight(&root, json)
         }
 
@@ -275,7 +298,10 @@ fn main() -> ExitCode {
 
         Commands::Baseline { action } => match action {
             BaselineAction::Init { path } => {
-                let root = match canonicalize_or_exit(&path) { Ok(r) => r, Err(e) => return e };
+                let root = match canonicalize_or_exit(&path) {
+                    Ok(r) => r,
+                    Err(e) => return e,
+                };
                 commands::misc::baseline_init(&root)
             }
             BaselineAction::Check { capture } => {
@@ -284,23 +310,35 @@ fn main() -> ExitCode {
         },
 
         Commands::SelfCheck { path } => {
-            let root = match canonicalize_or_exit(&path) { Ok(r) => r, Err(e) => return e };
+            let root = match canonicalize_or_exit(&path) {
+                Ok(r) => r,
+                Err(e) => return e,
+            };
             commands::misc::self_check(&root)
         }
 
         Commands::ShellHook => commands::misc::shell_hook(),
 
         Commands::Scorecard { path, output } => {
-            let root = match canonicalize_or_exit(&path) { Ok(r) => r, Err(e) => return e };
+            let root = match canonicalize_or_exit(&path) {
+                Ok(r) => r,
+                Err(e) => return e,
+            };
             commands::misc::scorecard(&root, &output)
         }
 
-        Commands::InstallGuard { json, command } => {
-            commands::misc::install_guard(&command, json)
-        }
+        Commands::InstallGuard { json, command } => commands::misc::install_guard(&command, json),
 
-        Commands::Audit { package, path, dry_run, budget: _ } => {
-            let root = match canonicalize_or_exit(&path) { Ok(r) => r, Err(e) => return e };
+        Commands::Audit {
+            package,
+            path,
+            dry_run,
+            budget: _,
+        } => {
+            let root = match canonicalize_or_exit(&path) {
+                Ok(r) => r,
+                Err(e) => return e,
+            };
             commands::audit_cmd::run(&package, &root, dry_run, color)
         }
 
@@ -331,7 +369,10 @@ fn main() -> ExitCode {
         },
 
         Commands::Badge { path } => {
-            let root = match canonicalize_or_exit(&path) { Ok(r) => r, Err(e) => return e };
+            let root = match canonicalize_or_exit(&path) {
+                Ok(r) => r,
+                Err(e) => return e,
+            };
             commands::misc::badge(&root)
         }
     }

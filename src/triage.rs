@@ -402,8 +402,8 @@ mod tests {
 
     #[test]
     fn test_build_context_returns_none_for_missing_file() {
-        let finding = Finding::new("DEPSEC-P001", Severity::High, "test")
-            .with_file("nonexistent/file.js", 1);
+        let finding =
+            Finding::new("DEPSEC-P001", Severity::High, "test").with_file("nonexistent/file.js", 1);
         let dir = TempDir::new().unwrap();
         assert!(build_context(&finding, dir.path()).is_none());
     }
@@ -441,26 +441,21 @@ mod tests {
 
     #[test]
     fn test_classification_serde_roundtrip() {
-        let tp: Classification =
-            serde_json::from_str("\"TP\"").unwrap();
+        let tp: Classification = serde_json::from_str("\"TP\"").unwrap();
         assert_eq!(tp, Classification::TruePositive);
 
-        let fp: Classification =
-            serde_json::from_str("\"FP\"").unwrap();
+        let fp: Classification = serde_json::from_str("\"FP\"").unwrap();
         assert_eq!(fp, Classification::FalsePositive);
 
-        let ni: Classification =
-            serde_json::from_str("\"NI\"").unwrap();
+        let ni: Classification = serde_json::from_str("\"NI\"").unwrap();
         assert_eq!(ni, Classification::NeedsInvestigation);
     }
 
     #[test]
     fn test_render_triage_results_no_color() {
-        let findings = vec![
-            Finding::new("DEPSEC-P001", Severity::High, "exec() call")
-                .with_file("node_modules/evil/index.js", 5)
-                .with_package_name("evil"),
-        ];
+        let findings = vec![Finding::new("DEPSEC-P001", Severity::High, "exec() call")
+            .with_file("node_modules/evil/index.js", 5)
+            .with_package_name("evil")];
         let results = vec![(
             0,
             TriageResult {
@@ -486,10 +481,8 @@ mod tests {
     #[test]
     fn test_render_triage_results_mixed() {
         let findings = vec![
-            Finding::new("DEPSEC-P001", Severity::High, "exec")
-                .with_package_name("bad-pkg"),
-            Finding::new("DEPSEC-P001", Severity::High, "exec")
-                .with_package_name("safe-pkg"),
+            Finding::new("DEPSEC-P001", Severity::High, "exec").with_package_name("bad-pkg"),
+            Finding::new("DEPSEC-P001", Severity::High, "exec").with_package_name("safe-pkg"),
         ];
         let results = vec![
             (
@@ -558,8 +551,7 @@ mod tests {
         let finding = unique_finding(&dir, "tp1");
 
         let mut mock = MockLlmApi::new();
-        mock.expect_chat()
-            .returning(|_| Ok(mock_tp_response()));
+        mock.expect_chat().returning(|_| Ok(mock_tp_response()));
 
         let config = TriageConfig::default();
         let results = triage_findings(&[finding], dir.path(), &mock, &config);
@@ -575,8 +567,7 @@ mod tests {
         let finding = unique_finding(&dir, "fp1");
 
         let mut mock = MockLlmApi::new();
-        mock.expect_chat()
-            .returning(|_| Ok(mock_fp_response()));
+        mock.expect_chat().returning(|_| Ok(mock_fp_response()));
 
         let config = TriageConfig::default();
         let results = triage_findings(&[finding], dir.path(), &mock, &config);
@@ -641,12 +632,13 @@ mod tests {
         let finding = unique_finding(&dir, "bad_json");
 
         let mut mock = MockLlmApi::new();
-        mock.expect_chat()
-            .returning(|_| Ok(ChatResponse {
+        mock.expect_chat().returning(|_| {
+            Ok(ChatResponse {
                 content: "not json at all".into(),
                 model: "test".into(),
                 usage: TokenUsage::default(),
-            }));
+            })
+        });
 
         let config = TriageConfig::default();
         let results = triage_findings(&[finding], dir.path(), &mock, &config);
