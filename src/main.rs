@@ -3,6 +3,8 @@ mod ast;
 mod attestation;
 mod audit;
 mod baseline;
+#[allow(dead_code)]
+mod canary;
 mod checks;
 mod config;
 mod fixer;
