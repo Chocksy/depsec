@@ -22,6 +22,7 @@ mod sarif;
 mod scanner;
 mod scorecard;
 mod scoring;
+mod secrets_ast;
 mod selfcheck;
 mod shellhook;
 mod triage;
@@ -198,6 +199,23 @@ enum Commands {
         budget: f64,
     },
 
+    /// Install/uninstall git pre-commit hook for secret detection
+    Hook {
+        #[command(subcommand)]
+        action: HookAction,
+    },
+
+    /// Check staged files for secrets (used by pre-commit hook)
+    SecretsCheck {
+        /// Only check staged files (for pre-commit hook)
+        #[arg(long)]
+        staged: bool,
+
+        /// Path to the project root
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
+
     /// Manage build attestations
     Attestation {
         #[command(subcommand)]
@@ -216,6 +234,14 @@ enum Commands {
         #[arg(default_value = ".")]
         path: PathBuf,
     },
+}
+
+#[derive(Subcommand)]
+enum HookAction {
+    /// Install pre-commit hook in .git/hooks/
+    Install,
+    /// Remove the pre-commit hook
+    Uninstall,
 }
 
 #[derive(Subcommand)]
@@ -696,6 +722,129 @@ fn main() -> ExitCode {
                     eprintln!("Error during audit: {e}");
                     ExitCode::from(2)
                 }
+            }
+        }
+
+        Commands::Hook { action } => match action {
+            HookAction::Install => {
+                let git_hooks = std::path::Path::new(".git/hooks");
+                if !git_hooks.exists() {
+                    eprintln!("Error: .git/hooks not found. Are you in a git repository?");
+                    return ExitCode::from(2);
+                }
+                let hook_path = git_hooks.join("pre-commit");
+                let hook_content = "#!/bin/sh\n# depsec pre-commit hook — blocks commits with hardcoded secrets\nexec depsec secrets-check --staged\n";
+                match std::fs::write(&hook_path, hook_content) {
+                    Ok(()) => {
+                        // Make executable
+                        #[cfg(unix)]
+                        {
+                            use std::os::unix::fs::PermissionsExt;
+                            let _ = std::fs::set_permissions(
+                                &hook_path,
+                                std::fs::Permissions::from_mode(0o755),
+                            );
+                        }
+                        println!("Installed pre-commit hook at .git/hooks/pre-commit");
+                        println!("Secrets will be checked on every commit.");
+                        println!("To bypass: git commit --no-verify");
+                        ExitCode::SUCCESS
+                    }
+                    Err(e) => {
+                        eprintln!("Error installing hook: {e}");
+                        ExitCode::from(2)
+                    }
+                }
+            }
+            HookAction::Uninstall => {
+                let hook_path = std::path::Path::new(".git/hooks/pre-commit");
+                if hook_path.exists() {
+                    match std::fs::remove_file(hook_path) {
+                        Ok(()) => {
+                            println!("Removed pre-commit hook.");
+                            ExitCode::SUCCESS
+                        }
+                        Err(e) => {
+                            eprintln!("Error removing hook: {e}");
+                            ExitCode::from(2)
+                        }
+                    }
+                } else {
+                    println!("No pre-commit hook found.");
+                    ExitCode::SUCCESS
+                }
+            }
+        },
+
+        Commands::SecretsCheck { staged, path } => {
+            let root = path.canonicalize().unwrap_or(path);
+
+            // Get files to check
+            let files: Vec<std::path::PathBuf> = if staged {
+                // Only staged files
+                match std::process::Command::new("git")
+                    .args(["diff", "--cached", "--name-only", "--diff-filter=ACM"])
+                    .current_dir(&root)
+                    .output()
+                {
+                    Ok(output) => String::from_utf8_lossy(&output.stdout)
+                        .lines()
+                        .filter(|l| !l.is_empty())
+                        .map(|l| root.join(l))
+                        .filter(|p| p.exists())
+                        .collect(),
+                    Err(_) => {
+                        eprintln!("Error: failed to get staged files from git");
+                        return ExitCode::from(2);
+                    }
+                }
+            } else {
+                // All tracked files
+                match std::process::Command::new("git")
+                    .args(["ls-files"])
+                    .current_dir(&root)
+                    .output()
+                {
+                    Ok(output) => String::from_utf8_lossy(&output.stdout)
+                        .lines()
+                        .filter(|l| !l.is_empty())
+                        .map(|l| root.join(l))
+                        .filter(|p| p.exists())
+                        .collect(),
+                    Err(_) => vec![],
+                }
+            };
+
+            if files.is_empty() {
+                println!("No files to check.");
+                return ExitCode::SUCCESS;
+            }
+
+            let findings = secrets_ast::scan_for_secrets(&root, &files);
+
+            if findings.is_empty() {
+                ExitCode::SUCCESS
+            } else {
+                eprintln!(
+                    "\n\x1b[31mdepsec: {} potential secret{} detected in {}files\x1b[0m\n",
+                    findings.len(),
+                    if findings.len() == 1 { "" } else { "s" },
+                    if staged { "staged " } else { "" },
+                );
+                for f in &findings {
+                    let location = match (&f.file, f.line) {
+                        (Some(file), Some(line)) => format!("{file}:{line}"),
+                        (Some(file), None) => file.clone(),
+                        _ => "?".into(),
+                    };
+                    eprintln!("  \x1b[31m✗\x1b[0m {location} — {}", f.message);
+                    if let Some(ref suggestion) = f.suggestion {
+                        eprintln!("    → {suggestion}");
+                    }
+                }
+                eprintln!("\nCommit blocked. To proceed anyway: git commit --no-verify");
+                eprintln!("To allowlist: add '// depsec:allow' comment on the line");
+                ExitCode::from(1)
             }
         }
 

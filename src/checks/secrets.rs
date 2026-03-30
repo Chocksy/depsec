@@ -212,6 +212,26 @@ impl Check for SecretsCheck {
             }
         }
 
+        // AST-based secret detection: finds secrets by variable name + entropy
+        let ast_findings = crate::secrets_ast::scan_for_secrets(ctx.root, &files);
+        // Deduplicate: don't report same file:line from both regex and AST
+        use std::collections::HashSet;
+        let existing_locations: HashSet<(String, usize)> = findings
+            .iter()
+            .filter_map(|f| {
+                let file = f.file.as_ref()?;
+                let line = f.line?;
+                Some((file.clone(), line))
+            })
+            .collect();
+
+        for af in ast_findings {
+            let loc = (af.file.clone().unwrap_or_default(), af.line.unwrap_or(0));
+            if !existing_locations.contains(&loc) {
+                findings.push(af);
+            }
+        }
+
         let file_count = files.len();
         let mut pass_messages = Vec::new();
         if findings.is_empty() {
