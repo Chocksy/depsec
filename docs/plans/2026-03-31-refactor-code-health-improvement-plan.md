@@ -17,6 +17,27 @@ depsec grew from v0.2.0 → v0.8.0 in 2 sessions (13,562 lines, 25 files, 182 te
 **Duplicated code:** `shannon_entropy()` duplicated, Finding construction boilerplate (35+ instances)
 **Large files:** main.rs (932 lines), audit.rs (727), output.rs (689)
 
+## Phase 0: Wire Scaffolded Features (NOT Dead Code!)
+
+These features have modules built and tested in isolation but are NOT wired into the main pipeline. They were presented as "shipped" but are actually incomplete:
+
+| Feature | Module | What's Missing |
+|---------|--------|----------------|
+| Canary tokens | `canary.rs` | Call `generate_canary_tokens()` from sandbox before sandboxed install |
+| Attestation generation | `attestation.rs` | Call `generate_attestation()` + `save_attestation()` from install-guard after monitor completes |
+| Python AST analysis | `tree-sitter-python` dep | Implement Python AST scanning in `secrets_ast.rs` (currently uses regex) |
+| Import location display | `reachability.rs` | Show "Your app imports this at file:line" in output.rs for runtime findings |
+| External rules engine | `rules.rs` | Wire `apply_rules()` into scanner.rs `run_scan()` |
+| Config watch_paths | `config.rs` | Add integration test verifying extra paths are monitored |
+
+**Acceptance criteria:**
+- [ ] Canary tokens placed in sandbox before install
+- [ ] Attestation generated after install-guard completes
+- [ ] Python AST scanning implemented (not just regex)
+- [ ] Import locations shown in pattern output for runtime findings
+- [ ] External rules applied during scan
+- [ ] Integration test for watch_paths config
+
 ## Phase 1: Eliminate Dead Code
 
 Remove `#[allow(dead_code)]` and either use the code or delete it:

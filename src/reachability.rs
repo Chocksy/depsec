@@ -35,8 +35,7 @@ pub fn scan_app_imports(root: &Path) -> AppImports {
         .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
         .expect("failed to set TS language");
 
-    // Also check devDependencies vs dependencies in package.json
-    let _dev_deps = read_dev_dependencies(root); // Available for future use
+    // devDependencies available via read_dev_dependencies(root) if needed
 
     // Find all source files
     for source_dir in SOURCE_DIRS {
