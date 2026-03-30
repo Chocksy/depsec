@@ -1,4 +1,6 @@
 mod ast;
+#[allow(dead_code)]
+mod attestation;
 mod audit;
 mod baseline;
 mod checks;
@@ -194,6 +196,12 @@ enum Commands {
         budget: f64,
     },
 
+    /// Manage build attestations
+    Attestation {
+        #[command(subcommand)]
+        action: AttestationAction,
+    },
+
     /// Manage triage cache
     Cache {
         #[command(subcommand)]
@@ -202,6 +210,22 @@ enum Commands {
 
     /// Output badge markdown
     Badge {
+        /// Path to the project root
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
+}
+
+#[derive(Subcommand)]
+enum AttestationAction {
+    /// Verify the build attestation
+    Verify {
+        /// Path to the project root
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
+    /// Show a one-line attestation summary (for PR comments)
+    Summary {
         /// Path to the project root
         #[arg(default_value = ".")]
         path: PathBuf,
@@ -672,6 +696,39 @@ fn main() -> ExitCode {
                 }
             }
         }
+
+        Commands::Attestation { action } => match action {
+            AttestationAction::Verify { path } => {
+                let root = path.canonicalize().unwrap_or(path);
+                match attestation::verify_attestation(&root) {
+                    Ok(result) => {
+                        println!("{}", result.message);
+                        if result.valid {
+                            ExitCode::SUCCESS
+                        } else {
+                            ExitCode::from(1)
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Error: {e}");
+                        ExitCode::from(2)
+                    }
+                }
+            }
+            AttestationAction::Summary { path } => {
+                let root = path.canonicalize().unwrap_or(path);
+                match attestation::attestation_summary(&root) {
+                    Ok(summary) => {
+                        println!("{summary}");
+                        ExitCode::SUCCESS
+                    }
+                    Err(e) => {
+                        eprintln!("Error: {e}");
+                        ExitCode::from(2)
+                    }
+                }
+            }
+        },
 
         Commands::Cache { action } => match action {
             CacheAction::Clear => match triage_cache::clear_cache() {
