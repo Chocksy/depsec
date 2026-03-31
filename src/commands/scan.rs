@@ -36,12 +36,56 @@ pub fn run(root: &Path, opts: &ScanOpts) -> ExitCode {
 
     match result {
         Ok(mut report) => {
-            // Tag pattern findings with reachability
+            // Tag findings with reachability + package category
             let app_imports = reachability::scan_app_imports(root);
+            let categories = reachability::read_package_categories(root);
             for result in &mut report.results {
                 for finding in &mut result.findings {
                     if let Some(pkg) = &finding.package {
-                        finding.reachable = Some(app_imports.packages.contains(pkg));
+                        // Extract package name, handling scoped packages and @version suffix
+                        // "lodash@4.17.21" -> "lodash"
+                        // "@scope/name@1.0.0" -> "@scope/name"
+                        let pkg_name = if let Some(rest) = pkg.strip_prefix('@') {
+                            // Scoped: find the second @ (version separator)
+                            match rest.find('@') {
+                                Some(pos) => &pkg[..pos + 1],
+                                None => pkg.as_str(),
+                            }
+                        } else {
+                            pkg.split('@').next().unwrap_or(pkg)
+                        };
+
+                        let is_imported = app_imports.packages.contains(pkg_name);
+                        let is_dev = categories.dev.contains(pkg_name);
+
+                        // reachable=true means: runtime dep imported by app
+                        // reachable=false means: dev dep, build tool, or not imported
+                        finding.reachable = Some(is_imported && !is_dev);
+                    }
+                }
+
+                // Compound risk tiers: downgrade capability findings for build/dev packages
+                if result.category == "capabilities" {
+                    for finding in &mut result.findings {
+                        if finding.reachable == Some(false) {
+                            // Downgrade build-tool capability severity by 1-2 levels
+                            finding.severity = match finding.severity {
+                                crate::checks::Severity::Critical => {
+                                    crate::checks::Severity::Medium
+                                }
+                                crate::checks::Severity::High => crate::checks::Severity::Low,
+                                _ => crate::checks::Severity::Low,
+                            };
+                            // Soften messaging for build tools
+                            if let Some(ref mut suggestion) = finding.suggestion {
+                                if suggestion.contains("Remove immediately") {
+                                    *suggestion = suggestion.replace(
+                                        "Remove immediately",
+                                        "Build tool — review if concerned",
+                                    );
+                                }
+                            }
+                        }
                     }
                 }
             }

@@ -382,31 +382,17 @@ fn render_deps_summary(
     reset: &str,
 ) {
     let total = findings.len();
-    let critical = findings
-        .iter()
-        .filter(|f| f.severity == Severity::Critical)
-        .count();
-    let high = findings
-        .iter()
-        .filter(|f| f.severity == Severity::High)
-        .count();
-    let medium = findings
-        .iter()
-        .filter(|f| f.severity == Severity::Medium)
-        .count();
-    let low = findings
-        .iter()
-        .filter(|f| f.severity == Severity::Low)
-        .count();
-
-    // Count unique packages from finding messages (extract package name from CVE messages)
     let malware = findings
         .iter()
         .filter(|f| f.rule_id.starts_with("DEPSEC-MAL"))
         .count();
     let cves = total - malware;
 
-    let icon = if critical > 0 || malware > 0 || high > 0 {
+    let icon = if findings.iter().any(|f| {
+        f.severity == Severity::Critical
+            || f.severity == Severity::High
+            || f.rule_id.starts_with("DEPSEC-MAL")
+    }) {
         if use_color {
             "\x1b[31m✗\x1b[0m"
         } else {
@@ -418,36 +404,66 @@ fn render_deps_summary(
         "⚠"
     };
 
-    out.push_str(&format!(
-        "  {icon} {cves} known vulnerabilit{ies}\n",
-        ies = if cves == 1 { "y" } else { "ies" },
-    ));
-
     if malware > 0 {
         let red = if use_color { "\x1b[31m" } else { "" };
         out.push_str(&format!(
-            "    {red}MALWARE: {malware} malicious package{s} — REMOVE IMMEDIATELY{reset}\n",
+            "  {icon} {red}MALWARE: {malware} malicious package{s} — REMOVE IMMEDIATELY{reset}\n",
             s = if malware == 1 { "" } else { "s" },
         ));
     }
 
-    // Severity breakdown
-    let mut parts = Vec::new();
-    if critical > 0 {
-        parts.push(format!("{critical} critical"));
+    // Group by package for collapsed view
+    let mut by_package: BTreeMap<String, Vec<&Finding>> = BTreeMap::new();
+    for f in findings {
+        let pkg = f
+            .package
+            .as_deref()
+            .unwrap_or("unknown")
+            .to_string();
+        by_package.entry(pkg).or_default().push(f);
     }
-    if high > 0 {
-        parts.push(format!("{high} high"));
-    }
-    if medium > 0 {
-        parts.push(format!("{medium} medium"));
-    }
-    if low > 0 {
-        parts.push(format!("{low} low"));
-    }
-    out.push_str(&format!("    {dim}Severity: {}{reset}\n", parts.join(", ")));
 
-    // Suggestion
+    let unique_pkgs = by_package.len();
+    out.push_str(&format!(
+        "  {icon} {cves} known vulnerabilit{ies} across {unique_pkgs} package{ps}\n",
+        ies = if cves == 1 { "y" } else { "ies" },
+        ps = if unique_pkgs == 1 { "" } else { "s" },
+    ));
+
+    // Show top packages by severity (max 8, then collapse)
+    let mut sorted_pkgs: Vec<(&String, &Vec<&Finding>)> = by_package.iter().collect();
+    sorted_pkgs.sort_by(|a, b| {
+        let max_a = a.1.iter().map(|f| f.severity).max().unwrap_or(Severity::Low);
+        let max_b = b.1.iter().map(|f| f.severity).max().unwrap_or(Severity::Low);
+        max_b.cmp(&max_a).then(b.1.len().cmp(&a.1.len()))
+    });
+
+    let show_count = sorted_pkgs.len().min(8);
+    for (pkg, pkg_findings) in sorted_pkgs.iter().take(show_count) {
+        let count = pkg_findings.len();
+        let max_sev = pkg_findings
+            .iter()
+            .map(|f| f.severity)
+            .max()
+            .unwrap_or(Severity::Low);
+        let sev_label = match max_sev {
+            Severity::Critical => "critical",
+            Severity::High => "high",
+            Severity::Medium => "medium",
+            Severity::Low => "low",
+        };
+        out.push_str(&format!(
+            "    {dim}{pkg} — {count} {sev_label}{reset}\n",
+        ));
+    }
+
+    if sorted_pkgs.len() > show_count {
+        out.push_str(&format!(
+            "    {dim}+{} more packages{reset}\n",
+            sorted_pkgs.len() - show_count,
+        ));
+    }
+
     out.push_str(&format!(
         "    → Run {dim}npm audit fix{reset} or {dim}cargo audit{reset} to resolve\n"
     ));

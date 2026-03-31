@@ -38,12 +38,13 @@ impl std::fmt::Display for Severity {
 }
 
 impl Severity {
+    #[allow(dead_code)]
     pub fn deduction_multiplier(&self) -> f64 {
         match self {
             Severity::Critical => 3.0,
             Severity::High => 2.0,
             Severity::Medium => 1.0,
-            Severity::Low => 0.5,
+            Severity::Low => 0.3,
         }
     }
 }

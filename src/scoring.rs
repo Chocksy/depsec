@@ -57,6 +57,8 @@ pub fn compute_total_score(results: &[CheckResult]) -> f64 {
 }
 
 pub fn compute_category_score(max_points: f64, findings: &[crate::checks::Finding]) -> f64 {
+    use crate::checks::Severity;
+
     if findings.is_empty() {
         return max_points;
     }
@@ -64,20 +66,54 @@ pub fn compute_category_score(max_points: f64, findings: &[crate::checks::Findin
     let num_checks = findings.len() as f64;
     let base_deduction = max_points / (num_checks + 1.0);
 
+    // Track per-severity counts for diminishing returns
+    let mut medium_count = 0u32;
+    let mut low_count = 0u32;
+
+    let has_high_or_critical = findings
+        .iter()
+        .any(|f| matches!(f.severity, Severity::Critical | Severity::High));
+
     let total_deduction: f64 = findings
         .iter()
         .map(|f| {
-            let severity_mult = f.severity.deduction_multiplier();
-            // Build-only findings have reduced impact on score
+            // Diminishing returns: each additional finding of same severity has less impact
+            let severity_mult = match f.severity {
+                Severity::Critical => 3.0,
+                Severity::High => 2.0,
+                Severity::Medium => {
+                    medium_count += 1;
+                    // 1st medium = 1.0, 10th = 0.5, 20th = 0.33, etc.
+                    1.0 / (1.0 + (medium_count.saturating_sub(1) as f64 * 0.1))
+                }
+                Severity::Low => {
+                    low_count += 1;
+                    // Low starts lower and diminishes faster
+                    0.3 / (1.0 + (low_count.saturating_sub(1) as f64 * 0.15))
+                }
+            };
+
+            // Build-only findings have heavily reduced impact
             let reachability_mult = match f.reachable {
-                Some(false) => 0.3, // Build-only: significantly reduced impact
+                Some(false) => 0.1, // Build-only: minimal impact (was 0.3)
                 _ => 1.0,           // Runtime or unknown: standard impact
             };
+
             base_deduction * severity_mult * reachability_mult
         })
         .sum();
 
-    (max_points - total_deduction).max(0.0)
+    let raw_score = (max_points - total_deduction).max(0.0);
+
+    // Floor: if no critical/high findings, score can't drop below 30% of max.
+    // This prevents 68 medium advisories from tanking to 0%.
+    let floor = if has_high_or_critical {
+        0.0
+    } else {
+        max_points * 0.3
+    };
+
+    raw_score.max(floor)
 }
 
 #[cfg(test)]
@@ -187,7 +223,7 @@ mod tests {
         assert_eq!(Severity::Critical.deduction_multiplier(), 3.0);
         assert_eq!(Severity::High.deduction_multiplier(), 2.0);
         assert_eq!(Severity::Medium.deduction_multiplier(), 1.0);
-        assert_eq!(Severity::Low.deduction_multiplier(), 0.5);
+        assert_eq!(Severity::Low.deduction_multiplier(), 0.3);
     }
 
     #[test]

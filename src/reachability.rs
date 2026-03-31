@@ -297,24 +297,91 @@ fn extract_script_block(content: &str) -> Option<String> {
     }
 }
 
-/// Read devDependencies from package.json.
-/// Scaffolded — planned for distinguishing dev vs prod deps in reachability.
-#[allow(dead_code)]
-fn read_dev_dependencies(root: &Path) -> HashSet<String> {
-    let pkg_json = root.join("package.json");
-    let mut dev_deps = HashSet::new();
+/// Package category information for distinguishing dev vs prod dependencies.
+pub struct PackageCategories {
+    /// Packages in "dependencies" (production)
+    #[allow(dead_code)]
+    pub production: HashSet<String>,
+    /// Packages in "devDependencies"
+    pub dev: HashSet<String>,
+}
 
-    if let Ok(content) = std::fs::read_to_string(&pkg_json) {
+/// Read dependency categories from package.json (and workspace package.jsons).
+/// Returns production and dev dependency sets for reachability-based severity.
+pub fn read_package_categories(root: &Path) -> PackageCategories {
+    let mut production = HashSet::new();
+    let mut dev = HashSet::new();
+
+    // Read root package.json
+    read_deps_from_package_json(&root.join("package.json"), &mut production, &mut dev);
+
+    // Read workspace package.jsons (monorepo support)
+    // Check for workspaces field in root package.json
+    if let Ok(content) = std::fs::read_to_string(root.join("package.json")) {
         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
-            if let Some(deps) = parsed["devDependencies"].as_object() {
-                for key in deps.keys() {
-                    dev_deps.insert(key.clone());
+            if let Some(workspaces) = parsed["workspaces"].as_array() {
+                for ws in workspaces {
+                    if let Some(pattern) = ws.as_str() {
+                        // Expand simple glob patterns like "apps/*", "packages/*"
+                        let base = pattern.trim_end_matches('*').trim_end_matches('/');
+                        let ws_dir = root.join(base);
+                        if ws_dir.is_dir() {
+                            if let Ok(entries) = std::fs::read_dir(&ws_dir) {
+                                for entry in entries.flatten() {
+                                    let pkg_json = entry.path().join("package.json");
+                                    read_deps_from_package_json(
+                                        &pkg_json,
+                                        &mut production,
+                                        &mut dev,
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
     }
 
-    dev_deps
+    // Also read Cargo.toml [dev-dependencies] if present
+    let cargo_toml = root.join("Cargo.toml");
+    if let Ok(content) = std::fs::read_to_string(&cargo_toml) {
+        if let Ok(parsed) = content.parse::<toml::Table>() {
+            if let Some(deps) = parsed.get("dependencies").and_then(|d| d.as_table()) {
+                for key in deps.keys() {
+                    production.insert(key.clone());
+                }
+            }
+            if let Some(deps) = parsed.get("dev-dependencies").and_then(|d| d.as_table()) {
+                for key in deps.keys() {
+                    dev.insert(key.clone());
+                }
+            }
+        }
+    }
+
+    PackageCategories { production, dev }
+}
+
+fn read_deps_from_package_json(
+    path: &Path,
+    production: &mut HashSet<String>,
+    dev: &mut HashSet<String>,
+) {
+    if let Ok(content) = std::fs::read_to_string(path) {
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content) {
+            if let Some(deps) = parsed["dependencies"].as_object() {
+                for key in deps.keys() {
+                    production.insert(key.clone());
+                }
+            }
+            if let Some(deps) = parsed["devDependencies"].as_object() {
+                for key in deps.keys() {
+                    dev.insert(key.clone());
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
