@@ -277,6 +277,7 @@ fn collect_scannable_files(root: &Path, ignore_globs: &[String]) -> Vec<std::pat
 
     // Fallback: walkdir
     WalkDir::new(root)
+        .follow_links(false) // Security: don't follow symlinks out of project
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
@@ -355,11 +356,12 @@ fn is_large_file(path: &Path) -> bool {
 fn mask_secret(line: &str, re: &Regex) -> String {
     if let Some(m) = re.find(line) {
         let matched = m.as_str();
-        if matched.len() <= 8 {
+        let chars: Vec<char> = matched.chars().collect();
+        if chars.len() <= 8 {
             return "****".to_string();
         }
-        let first4 = &matched[..4];
-        let last4 = &matched[matched.len() - 4..];
+        let first4: String = chars[..4].iter().collect();
+        let last4: String = chars[chars.len() - 4..].iter().collect();
         format!("{first4}...{last4}")
     } else {
         "****".to_string()

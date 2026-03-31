@@ -253,6 +253,8 @@ impl Check for PatternsCheck {
 
             let extra_skip_dirs = &ctx.config.patterns.skip_dirs;
             for entry in WalkDir::new(&dep_dir)
+                .follow_links(false) // Security: don't follow symlinks out of project
+                .max_depth(10) // Avoid pathological nesting in node_modules
                 .into_iter()
                 .filter_entry(|e| {
                     let name = e.file_name().to_str().unwrap_or("");
@@ -521,6 +523,8 @@ fn extract_package_name(rel_path: &str) -> Option<String> {
 
 /// Rules that are handled by the AST engine when the file is JS/TS
 fn is_ast_rule(rule_id: &str) -> bool {
+    // P014 is NOT included: AST detects dense fromCharCode (3+ calls),
+    // while regex detects individual fromCharCode+XOR patterns. Complementary.
     matches!(rule_id, "DEPSEC-P001" | "DEPSEC-P008" | "DEPSEC-P013")
 }
 
@@ -539,12 +543,15 @@ const DANGEROUS_EXEC_MODULES: &[&str] =
     &["child_process", "shelljs", "execa", "cross-spawn"];
 
 fn is_binary_ext(path: &Path) -> bool {
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| format!(".{e}"))
-        .unwrap_or_default();
-    BINARY_EXTENSIONS.contains(&ext.as_str())
+    match path.extension().and_then(|e| e.to_str()) {
+        Some(ext) => {
+            // Compare without dot prefix to avoid heap allocation per file
+            BINARY_EXTENSIONS
+                .iter()
+                .any(|bin_ext| bin_ext.strip_prefix('.') == Some(ext))
+        }
+        None => false,
+    }
 }
 
 fn is_skip_ext(path: &Path) -> bool {

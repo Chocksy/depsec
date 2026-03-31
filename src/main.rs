@@ -1,9 +1,9 @@
 mod ast;
-#[allow(dead_code)]
+
 mod attestation;
 mod audit;
 mod baseline;
-#[allow(dead_code)]
+
 mod canary;
 mod checks;
 mod commands;
@@ -17,7 +17,7 @@ mod parsers;
 mod preflight;
 mod reachability;
 mod rules;
-#[allow(dead_code)]
+
 mod sandbox;
 mod sarif;
 mod scanner;

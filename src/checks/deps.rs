@@ -157,7 +157,10 @@ fn query_osv_batch_url(packages: &[Package], osv_url: &str) -> anyhow::Result<Ve
 
         if let Some(results) = body.get("results").and_then(|r| r.as_array()) {
             for (i, result) in results.iter().enumerate() {
-                let pkg = &chunk[i];
+                let pkg = match chunk.get(i) {
+                    Some(p) => p,
+                    None => continue, // API returned more results than we sent
+                };
 
                 if let Some(vulns) = result.get("vulns").and_then(|v| v.as_array()) {
                     for vuln in vulns {

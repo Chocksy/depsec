@@ -92,7 +92,6 @@ const NPM_TOP_PACKAGES: &[&str] = &[
     "xlsx",
     "csv-parser",
     "xml2js",
-    "dotenv",
     "cross-env",
     "concurrently",
     "nodemon",
@@ -534,23 +533,16 @@ fn is_recently_published(date_str: &str, days: u64) -> bool {
     let month: i64 = parts[1].parse().unwrap_or(0);
     let day: i64 = parts[2].parse().unwrap_or(0);
 
-    // Get today's date
-    let today = std::process::Command::new("date")
-        .arg("+%Y-%m-%d")
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .unwrap_or_default();
-    let today = today.trim();
-
-    let today_parts: Vec<&str> = today.split('-').collect();
-    if today_parts.len() != 3 {
-        return false;
-    }
-
-    let ty: i64 = today_parts[0].parse().unwrap_or(0);
-    let tm: i64 = today_parts[1].parse().unwrap_or(0);
-    let td: i64 = today_parts[2].parse().unwrap_or(0);
+    // Get today's date from SystemTime (no subprocess needed)
+    let secs_since_epoch = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+    let total_days = secs_since_epoch / 86400;
+    // Convert epoch days to approximate Y/M/D (good enough for "within N days" check)
+    let ty = 1970 + (total_days * 400 / 146097); // approximate year
+    let tm = ((total_days % 365) / 30) + 1; // approximate month
+    let td = (total_days % 365) % 30 + 1; // approximate day
 
     // Approximate days difference (not perfect but good enough)
     let pub_days = year * 365 + month * 30 + day;

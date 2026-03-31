@@ -233,6 +233,7 @@ pub fn attestation_summary(root: &Path) -> Result<String> {
 pub struct VerifyResult {
     pub valid: bool,
     pub message: String,
+    #[allow(dead_code)] // used in JSON serialization context
     pub attestation: Option<Attestation>,
 }
 

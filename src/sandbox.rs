@@ -26,6 +26,7 @@ impl std::fmt::Display for SandboxType {
 /// Result of a sandboxed install
 #[derive(Debug)]
 pub struct SandboxResult {
+    #[allow(dead_code)] // informational, used in debug output
     pub sandbox_type: SandboxType,
     pub exit_code: i32,
     pub success: bool,
@@ -129,6 +130,14 @@ fn run_bubblewrap(args: &[String], project_dir: &Path) -> Result<SandboxResult> 
 
 /// Run in sandbox-exec (macOS)
 fn run_sandbox_exec(args: &[String], project_dir: &Path) -> Result<SandboxResult> {
+    // Security: validate path doesn't contain Seatbelt profile syntax
+    let dir_str = project_dir.to_string_lossy();
+    if dir_str.contains('"') || dir_str.contains('(') || dir_str.contains(')') {
+        anyhow::bail!(
+            "Project directory contains characters that could inject sandbox rules: {}",
+            dir_str
+        );
+    }
     let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/user".into());
 
     // Deny-by-default sandbox profile — block ALL sensitive path reads

@@ -148,8 +148,8 @@ fn random_seed() -> u64 {
     u64::from_le_bytes(hash[..8].try_into().unwrap())
 }
 
-fn pseudo_random_string(seed: u64, len: usize) -> String {
-    let charset = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+/// LCG-based pseudo-random string generator with configurable charset
+fn pseudo_random_chars(seed: u64, len: usize, charset: &[u8]) -> String {
     let mut result = Vec::with_capacity(len);
     let mut state = seed;
     for _ in 0..len {
@@ -160,34 +160,18 @@ fn pseudo_random_string(seed: u64, len: usize) -> String {
         result.push(charset[idx]);
     }
     String::from_utf8(result).unwrap()
+}
+
+fn pseudo_random_string(seed: u64, len: usize) -> String {
+    pseudo_random_chars(seed, len, b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
 }
 
 fn pseudo_random_alphanum(seed: u64, len: usize) -> String {
-    let charset = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
-    let mut result = Vec::with_capacity(len);
-    let mut state = seed;
-    for _ in 0..len {
-        state = state
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        let idx = ((state >> 33) as usize) % charset.len();
-        result.push(charset[idx]);
-    }
-    String::from_utf8(result).unwrap()
+    pseudo_random_chars(seed, len, b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")
 }
 
 fn pseudo_random_base64(seed: u64, len: usize) -> String {
-    let charset = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut result = Vec::with_capacity(len);
-    let mut state = seed;
-    for _ in 0..len {
-        state = state
-            .wrapping_mul(6364136223846793005)
-            .wrapping_add(1442695040888963407);
-        let idx = ((state >> 33) as usize) % charset.len();
-        result.push(charset[idx]);
-    }
-    String::from_utf8(result).unwrap()
+    pseudo_random_chars(seed, len, b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
 }
 
 fn base64_lines(data: &str, line_len: usize) -> String {

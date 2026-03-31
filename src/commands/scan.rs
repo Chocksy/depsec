@@ -32,13 +32,16 @@ pub fn run(root: &Path, opts: &ScanOpts) -> ExitCode {
 
     let spinner = crate::spinner::Spinner::new("Scanning...");
     let result = scanner::run_scan_with_spinner(root, &config, opts.checks, Some(&spinner));
+
+    // Run reachability inside spinner scope (avoids post-scan hang)
+    spinner.set_status("reachability");
+    let app_imports = reachability::scan_app_imports(root);
+    let categories = reachability::read_package_categories(root);
     spinner.stop();
 
     match result {
         Ok(mut report) => {
             // Tag findings with reachability + package category
-            let app_imports = reachability::scan_app_imports(root);
-            let categories = reachability::read_package_categories(root);
             for result in &mut report.results {
                 for finding in &mut result.findings {
                     if let Some(pkg) = &finding.package {

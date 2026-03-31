@@ -294,8 +294,7 @@ fn extract_new_packages(args: &[String]) -> Vec<String> {
     // Skip the command and subcommand, collect package-like args
     args[2..]
         .iter()
-        .filter(|a| !a.starts_with('-')) // Skip flags
-        .filter(|a| !a.starts_with("--")) // Skip long flags
+        .filter(|a| !a.starts_with('-')) // Skip flags (covers both -f and --flag)
         .cloned()
         .collect()
 }

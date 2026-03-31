@@ -38,13 +38,22 @@ pub fn parse_npm(path: &Path) -> anyhow::Result<Vec<Package>> {
     }
     // v1: "dependencies" object
     else if let Some(deps) = parsed.get("dependencies").and_then(|d| d.as_object()) {
-        collect_v1_deps(deps, &mut packages);
+        collect_v1_deps(deps, &mut packages, 0);
     }
 
     Ok(packages)
 }
 
-fn collect_v1_deps(deps: &serde_json::Map<String, serde_json::Value>, packages: &mut Vec<Package>) {
+const MAX_V1_DEPTH: usize = 20; // Prevent stack overflow from pathological nesting
+
+fn collect_v1_deps(
+    deps: &serde_json::Map<String, serde_json::Value>,
+    packages: &mut Vec<Package>,
+    depth: usize,
+) {
+    if depth > MAX_V1_DEPTH {
+        return;
+    }
     for (name, value) in deps {
         if let Some(version) = value.get("version").and_then(|v| v.as_str()) {
             packages.push(Package {
@@ -56,7 +65,7 @@ fn collect_v1_deps(deps: &serde_json::Map<String, serde_json::Value>, packages: 
 
         // v1 can have nested dependencies
         if let Some(nested) = value.get("dependencies").and_then(|d| d.as_object()) {
-            collect_v1_deps(nested, packages);
+            collect_v1_deps(nested, packages, depth + 1);
         }
     }
 }

@@ -357,6 +357,7 @@ fn scan_package(pkg_dir: &Path) -> Option<PackageCapabilities> {
     // Scan JS/TS source files
     for entry in WalkDir::new(pkg_dir)
         .max_depth(5) // Don't go too deep
+        .follow_links(false) // Security: don't follow symlinks out of project
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())

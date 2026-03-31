@@ -45,8 +45,9 @@ fn cache_key(finding: &Finding, root: &Path) -> Option<String> {
     let short_hash = &hash[..12]; // 12 hex chars = 48 bits, birthday collision at ~16M entries
 
     // Sanitize both package and rule_id for filesystem safety
-    let safe_pkg = package.replace('/', "_");
-    let safe_rule = finding.rule_id.replace('/', "_");
+    // Also replace ".." to prevent path traversal attacks via crafted package names
+    let safe_pkg = package.replace('/', "_").replace("..", "_");
+    let safe_rule = finding.rule_id.replace('/', "_").replace("..", "_");
 
     Some(format!("{safe_pkg}/{safe_rule}-{short_hash}.json"))
 }
