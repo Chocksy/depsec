@@ -51,6 +51,7 @@ pub fn run_scan(
         Box::new(crate::checks::patterns::PatternsCheck),
         Box::new(crate::checks::secrets::SecretsCheck),
         Box::new(crate::checks::hygiene::HygieneCheck),
+        Box::new(crate::checks::capabilities::CapabilitiesCheck),
     ];
 
     let enabled = &config.checks.enabled;

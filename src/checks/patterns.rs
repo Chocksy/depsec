@@ -150,6 +150,26 @@ const PATTERN_RULES: &[PatternRule] = &[
         severity: Severity::High,
         confidence: Confidence::Medium,
     },
+    PatternRule {
+        rule_id: "DEPSEC-P018",
+        name: "Node Internal Binding",
+        description: "Direct access to Node.js internal bindings — bypasses require() completely",
+        suggestion: "process.binding() is almost never used in userland — investigate immediately",
+        narrative: "Accesses Node.js internal C++ bindings directly via process.binding() or process._linkedBinding(). This bypasses the normal require() system entirely, making it invisible to import-based capability detection.",
+        pattern: r"process\.(binding|_linkedBinding)\s*\(",
+        severity: Severity::Critical,
+        confidence: Confidence::High,
+    },
+    PatternRule {
+        rule_id: "DEPSEC-P019",
+        name: "VM Code Execution",
+        description: "vm module used to execute arbitrary code strings",
+        suggestion: "vm.runInThisContext/compileFunction can execute obfuscated payloads — review the code being executed",
+        narrative: "Uses Node.js vm module to compile and execute code strings at runtime. This can bypass static analysis by constructing code dynamically and executing it in the current or a new context.",
+        pattern: r"vm\.(runInThisContext|runInNewContext|compileFunction|createScript)\s*\(",
+        severity: Severity::High,
+        confidence: Confidence::Medium,
+    },
 ];
 
 const BINARY_EXTENSIONS: &[&str] = &[
@@ -1515,6 +1535,38 @@ mod tests {
         assert!(
             !p013.iter().any(|f| f.message.contains("ESCALATED")),
             "Single signal should NOT be escalated"
+        );
+    }
+
+    // --- P018: Node Internal Binding tests ---
+
+    #[test]
+    fn test_scan_detects_process_binding() {
+        let (dir, config) = setup_dep_file("const fs = process.binding('fs');");
+        let ctx = ScanContext {
+            root: dir.path(),
+            config: &config,
+        };
+        let result = PatternsCheck.run(&ctx).unwrap();
+        assert!(
+            result.findings.iter().any(|f| f.rule_id == "DEPSEC-P018"),
+            "Expected P018 finding for process.binding()"
+        );
+    }
+
+    // --- P019: VM Code Execution tests ---
+
+    #[test]
+    fn test_scan_detects_vm_run() {
+        let (dir, config) = setup_dep_file("const vm = require('vm');\nvm.runInThisContext(code);");
+        let ctx = ScanContext {
+            root: dir.path(),
+            config: &config,
+        };
+        let result = PatternsCheck.run(&ctx).unwrap();
+        assert!(
+            result.findings.iter().any(|f| f.rule_id == "DEPSEC-P019"),
+            "Expected P019 finding for vm.runInThisContext()"
         );
     }
 }

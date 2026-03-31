@@ -510,6 +510,79 @@ fn find_dynamic_require(tree: &tree_sitter::Tree, source: &[u8], findings: &mut 
             });
         }
     }
+
+    // Also detect dynamic import() — same logic as require()
+    // In tree-sitter, import(x) is a call_expression with function: (import)
+    let import_query = Query::new(
+        &tree.language(),
+        r#"
+        (call_expression
+          function: (import) @fn
+          arguments: (arguments . (_) @arg))
+        "#,
+    );
+
+    if let Ok(query) = import_query {
+        let fn_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "fn")
+            .unwrap();
+        let arg_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "arg")
+            .unwrap();
+
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), source);
+
+        while let Some(m) = matches.next() {
+            let fn_cap = m.captures.iter().find(|c| c.index as usize == fn_idx);
+            let arg_cap = m.captures.iter().find(|c| c.index as usize == arg_idx);
+            let (Some(fn_cap), Some(arg_cap)) = (fn_cap, arg_cap) else {
+                continue;
+            };
+
+            let arg_kind = arg_cap.node.kind();
+
+            if arg_kind == "string" || arg_kind == "string_fragment" {
+                continue;
+            }
+
+            if arg_kind == "template_string" {
+                let mut child_cursor = arg_cap.node.walk();
+                let has_substitution = arg_cap
+                    .node
+                    .children(&mut child_cursor)
+                    .any(|c| c.kind() == "template_substitution");
+                if !has_substitution {
+                    continue;
+                }
+            }
+
+            let (severity, arg_label) = match arg_kind {
+                "call_expression" => (Severity::Critical, "function call"),
+                "subscript_expression" | "member_expression" => {
+                    (Severity::Critical, "computed expression")
+                }
+                "identifier" => (Severity::High, "variable"),
+                _ => (Severity::High, "dynamic expression"),
+            };
+
+            let line = fn_cap.node.start_position().row + 1;
+
+            findings.push(AstFinding {
+                rule_id: "DEPSEC-P013".into(),
+                severity,
+                confidence: Confidence::High,
+                message: format!(
+                    "Dynamic import() with {arg_label} argument — module name computed at runtime"
+                ),
+                line,
+            });
+        }
+    }
 }
 
 /// P014 AST: Detect dense String.fromCharCode usage in function bodies (deobfuscation routines)
@@ -915,5 +988,36 @@ mod tests {
             .filter(|f| f.rule_id == "DEPSEC-P014")
             .collect();
         assert!(p014.is_empty(), "Single fromCharCode should NOT be flagged");
+    }
+
+    // --- P013: Dynamic import() tests ---
+
+    #[test]
+    fn test_dynamic_import_variable() {
+        let findings = parse_js(
+            r#"
+            const m = import(moduleName);
+        "#,
+        );
+        let p013: Vec<_> = findings
+            .iter()
+            .filter(|f| f.rule_id == "DEPSEC-P013")
+            .collect();
+        assert_eq!(p013.len(), 1);
+        assert!(p013[0].message.contains("import()"));
+    }
+
+    #[test]
+    fn test_static_import_expression_not_flagged() {
+        let findings = parse_js(
+            r#"
+            const m = import('lodash');
+        "#,
+        );
+        let p013: Vec<_> = findings
+            .iter()
+            .filter(|f| f.rule_id == "DEPSEC-P013")
+            .collect();
+        assert!(p013.is_empty(), "Static import() should NOT be flagged");
     }
 }

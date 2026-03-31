@@ -10,6 +10,7 @@ pub struct Config {
     pub checks: ChecksConfig,
     pub scoring: ScoringConfig,
     pub patterns: PatternsConfig,
+    pub capabilities: CapabilitiesConfig,
     pub triage: TriageConfig,
     pub install: InstallConfig,
 }
@@ -23,6 +24,15 @@ pub struct PatternsConfig {
     pub allow: HashMap<String, Vec<String>>,
     /// Additional directory names to skip inside dep dirs
     pub skip_dirs: Vec<String>,
+}
+
+/// Configuration for the capabilities check
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct CapabilitiesConfig {
+    /// Per-package capability allowlisting: package name → allowed capability names
+    /// Example: { "@my-org/http-client" = ["network"], "my-build-tool" = ["exec", "fs_write"] }
+    pub allow: HashMap<String, Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -48,6 +58,7 @@ impl Default for ChecksConfig {
                 "patterns".into(),
                 "secrets".into(),
                 "hygiene".into(),
+                "capabilities".into(),
             ],
         }
     }
@@ -62,6 +73,7 @@ pub struct ScoringConfig {
     pub secrets: u32,
     pub hygiene: u32,
     pub network: u32,
+    pub capabilities: u32,
 }
 
 impl Default for ScoringConfig {
@@ -73,6 +85,7 @@ impl Default for ScoringConfig {
             secrets: 25,
             hygiene: 10,
             network: 10,
+            capabilities: 10,
         }
     }
 }
@@ -86,6 +99,7 @@ impl ScoringConfig {
             "secrets" => self.secrets,
             "hygiene" => self.hygiene,
             "network" => self.network,
+            "capabilities" => self.capabilities,
             _ => 0,
         }
     }
@@ -178,7 +192,7 @@ mod tests {
         assert_eq!(config.scoring.secrets, 25);
         assert_eq!(config.scoring.hygiene, 10);
         assert_eq!(config.scoring.network, 10);
-        assert_eq!(config.checks.enabled.len(), 5);
+        assert_eq!(config.checks.enabled.len(), 6);
         assert!(config.ignore.patterns.is_empty());
     }
 

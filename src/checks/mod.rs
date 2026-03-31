@@ -1,3 +1,4 @@
+pub mod capabilities;
 pub mod deps;
 pub mod hygiene;
 pub mod patterns;
