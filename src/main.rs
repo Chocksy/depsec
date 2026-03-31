@@ -74,10 +74,16 @@ enum Commands {
         /// Output format: human (default), json, sarif
         #[arg(long, value_name = "FORMAT")]
         format: Option<String>,
-        /// Finding visibility level
-        #[arg(long, value_enum, default_value = "regular")]
-        persona: Persona,
-        /// Show all findings (no filtering)
+        /// Show full detailed output (default shows executive summary)
+        #[arg(long)]
+        full: bool,
+        /// Strict mode: show all findings including low-confidence
+        #[arg(long)]
+        strict: bool,
+        /// Relaxed mode: show medium+ confidence findings
+        #[arg(long)]
+        relaxed: bool,
+        /// Show all findings including build tools (no filtering)
         #[arg(long)]
         verbose: bool,
         /// Run LLM triage on findings
@@ -340,7 +346,9 @@ fn main() -> ExitCode {
             checks,
             json,
             format,
-            persona,
+            full,
+            strict,
+            relaxed,
             verbose,
             triage,
             triage_dry_run,
@@ -351,6 +359,15 @@ fn main() -> ExitCode {
                 let root = path.canonicalize().unwrap_or(path);
                 return commands::secrets::check(true, &root);
             }
+
+            // Derive persona from flags: --strict = Auditor, --relaxed = Pedantic
+            let persona = if strict {
+                Persona::Auditor
+            } else if relaxed {
+                Persona::Pedantic
+            } else {
+                Persona::Regular
+            };
 
             let root = match canonicalize_or_exit(&path) {
                 Ok(r) => r,
@@ -367,6 +384,7 @@ fn main() -> ExitCode {
                     triage,
                     triage_dry_run,
                     color,
+                    full,
                 },
             )
         }

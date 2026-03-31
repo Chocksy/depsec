@@ -310,6 +310,314 @@ pub fn render_human(
     out
 }
 
+/// Executive summary: prioritized actions instead of category-by-category listing.
+/// Shows red (action needed), yellow (review), green (passing), scorecard, and glossary.
+pub fn render_executive(report: &ScanReport, use_color: bool, persona: Persona) -> String {
+    let mut out = String::new();
+
+    let red = if use_color { "\x1b[31m" } else { "" };
+    let yellow = if use_color { "\x1b[33m" } else { "" };
+    let green = if use_color { "\x1b[32m" } else { "" };
+    let bold = if use_color { "\x1b[1m" } else { "" };
+    let dim = if use_color { "\x1b[90m" } else { "" };
+    let reset = if use_color { "\x1b[0m" } else { "" };
+
+    // Recompute score with persona filtering
+    let filtered_results: Vec<CheckResult> = report
+        .results
+        .iter()
+        .map(|r| {
+            let filtered: Vec<Finding> = r
+                .findings
+                .iter()
+                .filter(|f| finding_passes_persona(f, persona))
+                .cloned()
+                .collect();
+            CheckResult::new(
+                r.category.clone(),
+                filtered,
+                r.max_score,
+                r.pass_messages.clone(),
+            )
+        })
+        .collect();
+    let score = compute_total_score(&filtered_results);
+    let grade = compute_grade(score);
+
+    // Header
+    out.push_str(&format!(
+        "depsec v{} — {}",
+        env!("CARGO_PKG_VERSION"),
+        report.project_name,
+    ));
+    let grade_str = format_grade(&grade, use_color);
+    let score_str = format!("{:.1}/10", score / 10.0);
+    // Right-align the grade
+    let header_len = 8 + env!("CARGO_PKG_VERSION").len() + 3 + report.project_name.len();
+    let padding = if header_len < 55 { 55 - header_len } else { 2 };
+    out.push_str(&" ".repeat(padding));
+    out.push_str(&format!("Grade: {grade_str} ({score_str})\n\n"));
+
+    // Collect actions from all checks
+    let mut red_actions: Vec<String> = Vec::new();
+    let mut yellow_actions: Vec<String> = Vec::new();
+    let mut green_messages: Vec<String> = Vec::new();
+
+    for result in &filtered_results {
+        let category = &result.category;
+        let findings = &result.findings;
+
+        if findings.is_empty() {
+            // Category passed
+            for msg in &result.pass_messages {
+                green_messages.push(msg.clone());
+            }
+            continue;
+        }
+
+        // Count by severity and reachability
+        let critical_high: Vec<&Finding> = findings
+            .iter()
+            .filter(|f| matches!(f.severity, Severity::Critical | Severity::High))
+            .collect();
+        let runtime: Vec<&Finding> = findings
+            .iter()
+            .filter(|f| f.reachable != Some(false))
+            .collect();
+        let build_only: Vec<&Finding> = findings
+            .iter()
+            .filter(|f| f.reachable == Some(false))
+            .collect();
+        let fixable: Vec<&Finding> = findings.iter().filter(|f| f.auto_fixable).collect();
+
+        match category.as_str() {
+            "workflows" => {
+                if !fixable.is_empty() {
+                    red_actions.push(format!(
+                        "Pin workflow actions to SHA ({} unpinned) {dim}→ run: depsec fix{reset}",
+                        fixable.len()
+                    ));
+                }
+                let non_fixable_count = findings.iter().filter(|f| !f.auto_fixable).count();
+                if non_fixable_count > 0 {
+                    yellow_actions.push(format!(
+                        "{non_fixable_count} workflow permission issue{}",
+                        if non_fixable_count == 1 { "" } else { "s" }
+                    ));
+                }
+            }
+            "deps" => {
+                let malware: Vec<&Finding> = findings
+                    .iter()
+                    .filter(|f| f.rule_id.starts_with("DEPSEC-MAL"))
+                    .collect();
+                let cves = findings.len() - malware.len();
+                if !malware.is_empty() {
+                    red_actions.push(format!(
+                        "{red}MALWARE: {} malicious package{} — REMOVE IMMEDIATELY{reset}",
+                        malware.len(),
+                        if malware.len() == 1 { "" } else { "s" }
+                    ));
+                }
+                // Group CVEs by package
+                let mut pkgs: HashSet<&str> = HashSet::new();
+                for f in findings
+                    .iter()
+                    .filter(|f| !f.rule_id.starts_with("DEPSEC-MAL"))
+                {
+                    if let Some(pkg) = &f.package {
+                        pkgs.insert(pkg.split('@').next().unwrap_or(pkg));
+                    }
+                }
+                if cves > 0 {
+                    if critical_high
+                        .iter()
+                        .any(|f| !f.rule_id.starts_with("DEPSEC-MAL"))
+                    {
+                        red_actions.push(format!(
+                            "{} dependency advisories across {} packages {dim}→ run: npm audit fix{reset}",
+                            cves,
+                            pkgs.len()
+                        ));
+                    } else {
+                        yellow_actions.push(format!(
+                            "{} dependency advisories across {} packages {dim}→ run: npm audit fix{reset}",
+                            cves,
+                            pkgs.len()
+                        ));
+                    }
+                }
+            }
+            "secrets" => {
+                for f in findings {
+                    let location = match (&f.file, f.line) {
+                        (Some(file), Some(line)) => format!(" {dim}→ {file}:{line}{reset}"),
+                        (Some(file), None) => format!(" {dim}→ {file}{reset}"),
+                        _ => String::new(),
+                    };
+                    red_actions.push(format!("{}{location}", f.message));
+                }
+            }
+            "patterns" => {
+                if !runtime.is_empty() {
+                    // Group by package
+                    let mut pkgs: BTreeMap<&str, usize> = BTreeMap::new();
+                    for f in &runtime {
+                        let pkg = f.package.as_deref().unwrap_or("unknown");
+                        *pkgs.entry(pkg).or_default() += 1;
+                    }
+                    if !critical_high.is_empty() {
+                        red_actions.push(format!(
+                            "{} suspicious pattern{} in {} runtime package{}",
+                            runtime.len(),
+                            if runtime.len() == 1 { "" } else { "s" },
+                            pkgs.len(),
+                            if pkgs.len() == 1 { "" } else { "s" },
+                        ));
+                    } else {
+                        yellow_actions.push(format!(
+                            "{} suspicious pattern{} in {} runtime package{}",
+                            runtime.len(),
+                            if runtime.len() == 1 { "" } else { "s" },
+                            pkgs.len(),
+                            if pkgs.len() == 1 { "" } else { "s" },
+                        ));
+                    }
+                }
+                if !build_only.is_empty() {
+                    green_messages.push(format!(
+                        "Patterns: {} build-tool findings suppressed (not in production)",
+                        build_only.len()
+                    ));
+                }
+            }
+            "hygiene" => {
+                for f in findings {
+                    yellow_actions.push(f.message.clone());
+                }
+            }
+            "capabilities" => {
+                let runtime_caps: Vec<&Finding> = findings
+                    .iter()
+                    .filter(|f| f.reachable == Some(true))
+                    .collect();
+                if !runtime_caps.is_empty() {
+                    let mut pkgs: HashSet<&str> = HashSet::new();
+                    for f in &runtime_caps {
+                        if let Some(pkg) = &f.package {
+                            pkgs.insert(pkg.as_str());
+                        }
+                    }
+                    yellow_actions.push(format!(
+                        "{} capability warnings in {} runtime package{}",
+                        runtime_caps.len(),
+                        pkgs.len(),
+                        if pkgs.len() == 1 { "" } else { "s" },
+                    ));
+                }
+                if !build_only.is_empty() {
+                    // Compute score percentage for this category
+                    let cap_result = filtered_results
+                        .iter()
+                        .find(|r| r.category == "capabilities");
+                    let pct = cap_result
+                        .map(|r| {
+                            if r.max_score > 0.0 {
+                                (r.score / r.max_score * 100.0) as u32
+                            } else {
+                                100
+                            }
+                        })
+                        .unwrap_or(100);
+                    green_messages.push(format!(
+                        "Capabilities: build tools properly isolated ({pct}%)"
+                    ));
+                } else if findings.is_empty() {
+                    green_messages.push("Capabilities: no dangerous combinations found".into());
+                }
+            }
+            _ => {
+                // External rules or unknown categories
+                if !findings.is_empty() {
+                    yellow_actions.push(format!(
+                        "{} {} finding{}",
+                        findings.len(),
+                        category,
+                        if findings.len() == 1 { "" } else { "s" }
+                    ));
+                }
+            }
+        }
+    }
+
+    // Render actions
+    let mut action_num = 1;
+
+    if !red_actions.is_empty() {
+        out.push_str(&format!("{red}{bold}Actions needed:{reset}\n"));
+        for action in &red_actions {
+            out.push_str(&format!("  {red}{action_num}.{reset} {action}\n"));
+            action_num += 1;
+        }
+        out.push('\n');
+    }
+
+    if !yellow_actions.is_empty() {
+        out.push_str(&format!("{yellow}{bold}Review:{reset}\n"));
+        for action in &yellow_actions {
+            out.push_str(&format!("  {yellow}{action_num}.{reset} {action}\n"));
+            action_num += 1;
+        }
+        out.push('\n');
+    }
+
+    if !green_messages.is_empty() {
+        out.push_str(&format!("{green}{bold}Passing:{reset}\n"));
+        for msg in &green_messages {
+            out.push_str(&format!("  {green}✓{reset} {msg}\n"));
+        }
+        out.push('\n');
+    }
+
+    // Triage suggestion
+    let medium_confidence_count = filtered_results
+        .iter()
+        .flat_map(|r| &r.findings)
+        .filter(|f| f.confidence == Some(Confidence::Medium))
+        .count();
+    if medium_confidence_count > 0 {
+        out.push_str(&format!(
+            "{dim}{medium_confidence_count} ambiguous finding{} → run 'depsec scan --triage' for AI classification{reset}\n\n",
+            if medium_confidence_count == 1 { "" } else { "s" }
+        ));
+    }
+
+    // Scorecard
+    let filtered_report = ScanReport {
+        version: report.version.clone(),
+        project_name: report.project_name.clone(),
+        repo_url: report.repo_url.clone(),
+        results: filtered_results,
+        total_score: score,
+        grade,
+    };
+    out.push_str(&render_ascii_scorecard(&filtered_report, use_color));
+
+    // Glossary
+    let glossary = render_rule_glossary(report, use_color);
+    if !glossary.is_empty() {
+        out.push('\n');
+        out.push_str(&glossary);
+    }
+
+    // Footer
+    out.push_str(&format!(
+        "\n{dim}Run 'depsec scan --full' for detailed breakdown.{reset}\n"
+    ));
+
+    out
+}
+
 fn render_rule_glossary(report: &ScanReport, use_color: bool) -> String {
     let dim = if use_color { "\x1b[90m" } else { "" };
     let bold = if use_color { "\x1b[1m" } else { "" };

@@ -13,6 +13,7 @@ pub struct ScanOpts<'a> {
     pub triage: bool,
     pub triage_dry_run: bool,
     pub color: bool,
+    pub full: bool,
 }
 
 pub fn run(root: &Path, opts: &ScanOpts) -> ExitCode {
@@ -112,10 +113,19 @@ pub fn run(root: &Path, opts: &ScanOpts) -> ExitCode {
                     }
                 },
                 _ => {
-                    print!(
-                        "{}",
-                        output::render_human(&report, opts.color, opts.persona, opts.verbose)
-                    );
+                    if opts.full || opts.verbose {
+                        // --full or --verbose: detailed category-by-category output
+                        print!(
+                            "{}",
+                            output::render_human(&report, opts.color, opts.persona, opts.verbose)
+                        );
+                    } else {
+                        // Default: executive summary
+                        print!(
+                            "{}",
+                            output::render_executive(&report, opts.color, opts.persona,)
+                        );
+                    }
                 }
             }
 
