@@ -18,7 +18,7 @@ fn generate_posix_hook() -> String {
     ];
 
     for cmd in &commands {
-        output.push_str(&format!("alias {cmd}='depsec install-guard {cmd}'\n"));
+        output.push_str(&format!("alias {cmd}='depsec protect {cmd}'\n"));
     }
 
     output.push_str("echo 'depsec: shell hooks active — package installs monitored'\n");
@@ -34,7 +34,7 @@ fn generate_fish_hook() -> String {
     ];
 
     for cmd in &commands {
-        output.push_str(&format!("alias {cmd} 'depsec install-guard {cmd}'\n"));
+        output.push_str(&format!("alias {cmd} 'depsec protect {cmd}'\n"));
     }
 
     output.push_str("echo 'depsec: shell hooks active — package installs monitored'\n");
@@ -48,20 +48,20 @@ mod tests {
     #[test]
     fn test_posix_hook_output() {
         let hook = generate_posix_hook();
-        assert!(hook.contains("alias npm='depsec install-guard npm'"));
-        assert!(hook.contains("alias pip='depsec install-guard pip'"));
-        assert!(hook.contains("alias cargo='depsec install-guard cargo'"));
+        assert!(hook.contains("alias npm='depsec protect npm'"));
+        assert!(hook.contains("alias pip='depsec protect pip'"));
+        assert!(hook.contains("alias cargo='depsec protect cargo'"));
     }
 
     #[test]
     fn test_fish_hook_output() {
         let hook = generate_fish_hook();
-        assert!(hook.contains("alias npm 'depsec install-guard npm'"));
+        assert!(hook.contains("alias npm 'depsec protect npm'"));
     }
 
     #[test]
     fn test_generate_shell_hook() {
         let hook = generate_shell_hook();
-        assert!(hook.contains("depsec install-guard"));
+        assert!(hook.contains("depsec protect"));
     }
 }

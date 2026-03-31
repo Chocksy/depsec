@@ -108,9 +108,9 @@ pub fn scan_for_secrets(root: &Path, files: &[std::path::PathBuf]) -> Vec<Findin
             scan_rust_constants(&content, &rel_path, &mut findings);
         }
 
-        // Python files: scan with regex for assignments
+        // Python files: scan with tree-sitter AST for assignments
         if ext == "py" {
-            scan_python_assignments(&content, &rel_path, &mut findings);
+            scan_python_ast(&content, &rel_path, &mut findings);
         }
     }
 
@@ -187,21 +187,19 @@ fn scan_rust_constants(content: &str, file_path: &str, findings: &mut Vec<Findin
     }
 }
 
-/// Scan Python assignments for hardcoded secrets
-fn scan_python_assignments(content: &str, file_path: &str, findings: &mut Vec<Finding>) {
-    // Pattern: NAME = "value" or NAME = 'value'
-    let re = regex::Regex::new(r#"(?i)([A-Z_][A-Z0-9_]*)\s*=\s*['"]([^'"]{8,})['"]"#).unwrap();
+/// Scan Python assignments for hardcoded secrets using tree-sitter AST
+fn scan_python_ast(content: &str, file_path: &str, findings: &mut Vec<Finding>) {
+    let mut parser = crate::ast::python::new_parser();
+    let assignments = crate::ast::python::extract_assignments(&mut parser, content);
 
-    for (line_num, line) in content.lines().enumerate() {
-        if line.contains("depsec:allow") {
-            continue;
+    for (name, value, line) in assignments {
+        // Check if line has depsec:allow
+        if let Some(src_line) = content.lines().nth(line.saturating_sub(1)) {
+            if src_line.contains("depsec:allow") {
+                continue;
+            }
         }
-
-        if let Some(caps) = re.captures(line) {
-            let name = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-            let value = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-            check_secret_candidate(name, value, file_path, line_num + 1, findings);
-        }
+        check_secret_candidate(&name, &value, file_path, line, findings);
     }
 }
 

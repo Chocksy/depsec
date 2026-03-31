@@ -24,6 +24,16 @@ fn rule_info(rule_id: &str) -> Option<RuleInfo> {
         "DEPSEC-P010" => RuleInfo { name: "Cloud Credential Probing", narrative: "Accesses cloud instance metadata (169.254.169.254). IMDS provides IAM credentials. Could steal cloud credentials." },
         "DEPSEC-P011" => RuleInfo { name: "Environment Exfiltration", narrative: "Serializes process.env to JSON. Environment variables often contain API keys and secrets." },
         "DEPSEC-P012" => RuleInfo { name: "Suspicious Install Hook", narrative: "package.json install script contains suspicious commands. Install hooks run with full system access." },
+        "DEPSEC-P013" => RuleInfo { name: "Dynamic Require", narrative: "Calls require() with a variable, function call, or computed expression instead of a string literal. This hides the actual module being loaded, defeating static analysis. The #1 evasion technique in npm malware." },
+        "DEPSEC-P014" => RuleInfo { name: "String Deobfuscation", narrative: "Uses String.fromCharCode combined with XOR or bitwise operations to decode hidden strings at runtime. This is the primary obfuscation technique in npm malware like the axios/plain-crypto-js attack." },
+        "DEPSEC-P015" => RuleInfo { name: "Anti-Forensic File Operations", narrative: "Deletes its own source file or replaces package.json after execution to destroy evidence. The axios/plain-crypto-js attack deleted setup.js and renamed package.md to package.json to appear clean after infection." },
+        "DEPSEC-P017" => RuleInfo { name: "Code Obfuscation", narrative: "Uses patterns common in JavaScript obfuscators: hex-prefixed function names (_0x...), while(!![]) infinite loops, or dynamic global property access via Buffer.from." },
+        "DEPSEC-P018" => RuleInfo { name: "Typosquat Install Hook", narrative: "Typosquatted package name combined with install-time execution. Low download count packages with postinstall hooks that run shell commands." },
+        "DEPSEC-P019" => RuleInfo { name: "Shadowed Builtin", narrative: "Overrides a Node.js builtin module name with a local file. This can trick require() into loading attacker-controlled code instead of the real builtin." },
+        "DEPSEC-P020" => RuleInfo { name: "Python Dynamic Execution", narrative: "Calls eval(), exec(), or compile() in Python. These execute arbitrary code at runtime. If the argument comes from user input or external data, this enables Remote Code Execution." },
+        "DEPSEC-P021" => RuleInfo { name: "Subprocess Shell Injection", narrative: "Uses subprocess.Popen/call/run with shell=True. When combined with user-controlled input, this allows command injection via shell metacharacters." },
+        "DEPSEC-P022" => RuleInfo { name: "OS Command Execution", narrative: "Calls os.system() or os.popen() which execute commands through the system shell. These are deprecated in favor of subprocess and are more vulnerable to injection." },
+        "DEPSEC-P023" => RuleInfo { name: "Dynamic Module Import", narrative: "Uses __import__() to dynamically load a module at runtime. When the module name is computed from variables, this can be used to load attacker-controlled code." },
         _ => return None,
     })
 }

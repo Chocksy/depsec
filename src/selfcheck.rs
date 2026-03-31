@@ -68,12 +68,20 @@ pub fn run_self_check(root: &Path) {
         println!("CI:            ⚠ no CI workflow found");
     }
 
-    // Trust chain
+    // Trust chain (conditional on actual evidence)
     println!();
     println!("Trust chain:");
     println!("  ✓ Source: public on GitHub");
-    println!("  ✓ Dependencies: audited by cargo-deny + OSV on every commit");
-    println!("  ✓ Network: build connections monitored in CI");
+    if deny_toml.exists() {
+        println!("  ✓ Dependencies: audited by cargo-deny + OSV on every commit");
+    } else {
+        println!("  ✗ Dependencies: no cargo-deny configured");
+    }
+    if ci_yml.exists() {
+        println!("  ✓ Network: build connections monitored in CI");
+    } else {
+        println!("  ✗ Network: no CI workflow to monitor builds");
+    }
     println!("  ✗ Reproducible build: not yet implemented");
     println!("  ✗ SLSA attestation: not yet implemented");
 }

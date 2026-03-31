@@ -43,7 +43,6 @@ pub struct MatchConfig {
 }
 
 impl RuleDef {
-    #[allow(dead_code)]
     pub fn severity(&self) -> Severity {
         match self.severity.to_lowercase().as_str() {
             "critical" => Severity::Critical,
@@ -102,7 +101,6 @@ fn load_rule_file(path: &Path) -> anyhow::Result<RuleDef> {
 }
 
 /// Apply external rules against scanned files, returning findings
-#[allow(dead_code)]
 pub fn apply_rules(rules: &[RuleDef], root: &Path) -> Vec<Finding> {
     let mut findings = Vec::new();
 

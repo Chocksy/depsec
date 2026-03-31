@@ -5,7 +5,7 @@ use std::process::ExitCode;
 use crate::llm::LlmApi;
 use crate::{audit, config, llm};
 
-pub fn run(package: &str, root: &Path, dry_run: bool, color: bool) -> ExitCode {
+pub fn run(package: &str, root: &Path, dry_run: bool, color: bool, budget: f64) -> ExitCode {
     let config = config::load_config(root);
 
     let profile = match audit::locate_package(package, root) {
@@ -40,7 +40,7 @@ pub fn run(package: &str, root: &Path, dry_run: bool, color: bool) -> ExitCode {
         }
     };
 
-    match audit::run_audit(&profile, &client, &config.triage, false) {
+    match audit::run_audit(&profile, &client, &config.triage, false, budget) {
         Ok(result) => {
             print!("{}", audit::render_audit_results(&result, color));
             if result.findings.is_empty() {

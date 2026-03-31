@@ -72,8 +72,8 @@ pub struct ScoringConfig {
     pub patterns: u32,
     pub secrets: u32,
     pub hygiene: u32,
-    pub network: u32,
     pub capabilities: u32,
+    pub external_rules: u32,
 }
 
 impl Default for ScoringConfig {
@@ -84,8 +84,8 @@ impl Default for ScoringConfig {
             patterns: 10,
             secrets: 25,
             hygiene: 10,
-            network: 10,
             capabilities: 10,
+            external_rules: 0,
         }
     }
 }
@@ -98,8 +98,8 @@ impl ScoringConfig {
             "patterns" => self.patterns,
             "secrets" => self.secrets,
             "hygiene" => self.hygiene,
-            "network" => self.network,
             "capabilities" => self.capabilities,
+            "external_rules" => self.external_rules,
             _ => 0,
         }
     }
@@ -191,7 +191,8 @@ mod tests {
         assert_eq!(config.scoring.patterns, 10);
         assert_eq!(config.scoring.secrets, 25);
         assert_eq!(config.scoring.hygiene, 10);
-        assert_eq!(config.scoring.network, 10);
+        assert_eq!(config.scoring.capabilities, 10);
+        assert_eq!(config.scoring.external_rules, 0);
         assert_eq!(config.checks.enabled.len(), 6);
         assert!(config.ignore.patterns.is_empty());
     }
@@ -212,7 +213,7 @@ workflows = 30
 deps = 30
 secrets = 20
 hygiene = 10
-network = 10
+capabilities = 10
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.ignore.patterns, vec!["DEPSEC-P003"]);

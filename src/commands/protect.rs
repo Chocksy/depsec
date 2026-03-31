@@ -4,11 +4,8 @@ use crate::{config, install_guard, preflight};
 
 pub struct ProtectOpts {
     pub json: bool,
-    #[allow(dead_code)] // Scaffolded for sandbox integration
     pub sandbox: bool,
-    #[allow(dead_code)] // Scaffolded for learn mode
     pub learn: bool,
-    #[allow(dead_code)] // Scaffolded for strict mode
     pub strict: bool,
     pub preflight_only: bool,
 }
@@ -40,9 +37,20 @@ pub fn run(command: &[String], opts: &ProtectOpts) -> ExitCode {
         };
     }
 
-    // Full protect mode: preflight + monitor + watchdog (via install-guard)
-    match install_guard::run_install_guard(command, &root, &config.install, opts.json) {
+    // Full protect mode: preflight + sandbox + monitor + watchdog
+    match install_guard::run_install_guard(
+        command,
+        &root,
+        &config.install,
+        opts.json,
+        opts.learn,
+        opts.strict,
+        opts.sandbox,
+    ) {
         Ok(result) => {
+            if opts.json {
+                println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
+            }
             if result.has_issues {
                 ExitCode::from(1)
             } else {

@@ -1,4 +1,5 @@
 pub mod javascript;
+pub mod python;
 
 use std::path::Path;
 
@@ -11,6 +12,7 @@ use crate::checks::{Confidence, Severity};
 pub enum Lang {
     JavaScript,
     TypeScript,
+    Python,
 }
 
 /// A finding produced by AST analysis — higher confidence than regex
@@ -25,6 +27,7 @@ pub struct AstFinding {
 pub struct AstAnalyzer {
     js_parser: Parser,
     ts_parser: Parser,
+    py_parser: Parser,
 }
 
 impl AstAnalyzer {
@@ -39,18 +42,23 @@ impl AstAnalyzer {
             .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
             .expect("failed to set TS language");
 
+        let py_parser = python::new_parser();
+
         Self {
             js_parser,
             ts_parser,
+            py_parser,
         }
     }
 
     /// Analyze a file for security patterns using AST.
-    /// Returns findings for rules P001, P002, P008 with High confidence.
+    /// Returns findings for rules P001, P002, P008, P013, P014 (JS/TS)
+    /// and P020-P023 (Python) with High confidence.
     pub fn analyze(&mut self, path: &Path, source: &str) -> Vec<AstFinding> {
         match detect_language(path) {
             Some(Lang::JavaScript) => javascript::analyze(&mut self.js_parser, source),
             Some(Lang::TypeScript) => javascript::analyze(&mut self.ts_parser, source),
+            Some(Lang::Python) => python::analyze(&mut self.py_parser, source),
             None => vec![],
         }
     }
@@ -66,6 +74,7 @@ fn detect_language(path: &Path) -> Option<Lang> {
     match ext {
         "js" | "mjs" | "cjs" | "jsx" => Some(Lang::JavaScript),
         "ts" | "mts" | "cts" | "tsx" => Some(Lang::TypeScript),
+        "py" | "pyw" => Some(Lang::Python),
         _ => None,
     }
 }
@@ -111,8 +120,13 @@ mod tests {
     }
 
     #[test]
+    fn test_detect_language_python() {
+        assert_eq!(detect_language(Path::new("file.py")), Some(Lang::Python));
+        assert_eq!(detect_language(Path::new("file.pyw")), Some(Lang::Python));
+    }
+
+    #[test]
     fn test_detect_language_unknown() {
-        assert_eq!(detect_language(Path::new("file.py")), None);
         assert_eq!(detect_language(Path::new("file.rs")), None);
         assert_eq!(detect_language(Path::new("file.rb")), None);
         assert_eq!(detect_language(Path::new("file")), None);

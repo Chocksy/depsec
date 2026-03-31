@@ -82,6 +82,20 @@ pub fn run_scan(
         }
     }
 
+    // Apply external rules (loaded from .depsec/rules/ and ~/.config/depsec/rules/)
+    let external_rules = crate::rules::load_external_rules(root);
+    if !external_rules.is_empty() {
+        let ext_findings = crate::rules::apply_rules(&external_rules, root);
+        if !ext_findings.is_empty() {
+            results.push(CheckResult::new(
+                "external_rules",
+                ext_findings,
+                0.0,
+                vec![],
+            ));
+        }
+    }
+
     let project_name = detect_project_name(root);
     Ok(ScanReport::new(project_name, results).with_repo_url(root))
 }

@@ -365,6 +365,7 @@ pub fn run_audit(
     client: &dyn LlmApi,
     _config: &TriageConfig,
     dry_run: bool,
+    budget: f64,
 ) -> Result<AuditResult> {
     if dry_run {
         return Ok(AuditResult {
@@ -386,7 +387,8 @@ pub fn run_audit(
 
     let mut all_findings = Vec::new();
     let mut total_tokens = 0u32;
-    let max_rounds = 5;
+    let mut total_cost = 0.0f64;
+    let mut rounds_completed = 0;
 
     // Build the analysis prompt with capability map and key files
     let cap_summary = build_capability_summary(&profile.capabilities);
@@ -437,6 +439,8 @@ Analyze this package for security vulnerabilities. Focus on:
     match crate::llm::chat_json::<LlmAuditResponse>(client, &messages) {
         Ok((response, usage)) => {
             total_tokens += usage.total_tokens;
+            total_cost += client.estimate_cost(usage.prompt_tokens, usage.completion_tokens);
+            rounds_completed += 1;
 
             for lf in response.findings {
                 if lf.confidence >= 7.0 {
@@ -461,14 +465,19 @@ Analyze this package for security vulnerabilities. Focus on:
         }
     }
 
-    // Phase 4: Self-verification — challenge each finding
-    if !all_findings.is_empty() {
+    // Phase 4: Self-verification — challenge each finding (if budget allows)
+    if !all_findings.is_empty() && total_cost < budget {
         eprintln!(
             "  Round 2: Self-verification ({} candidates)...",
             all_findings.len()
         );
 
+        rounds_completed += 1;
         for finding in &mut all_findings {
+            if total_cost >= budget {
+                eprintln!("  Budget limit ${:.2} reached (spent ${:.2}). Skipping remaining verifications.", budget, total_cost);
+                break;
+            }
             let verify_prompt = format!(
                 r#"You previously identified this potential vulnerability. Now argue AGAINST it being real.
 
@@ -511,6 +520,7 @@ Respond with JSON: {{"verdict": "CONFIRMED|DEBUNKED", "reasoning": "..."}}"#,
             match crate::llm::chat_json::<VerifyResponse>(client, &messages) {
                 Ok((verify, usage)) => {
                     total_tokens += usage.total_tokens;
+                    total_cost += client.estimate_cost(usage.prompt_tokens, usage.completion_tokens);
                     if verify.verdict.to_uppercase().contains("CONFIRMED") {
                         finding.verified = true;
                     }
@@ -535,7 +545,7 @@ Respond with JSON: {{"verdict": "CONFIRMED|DEBUNKED", "reasoning": "..."}}"#,
         },
         findings: all_findings,
         total_tokens,
-        rounds: max_rounds.min(2), // Currently 2 rounds (analysis + verification)
+        rounds: rounds_completed,
     })
 }
 

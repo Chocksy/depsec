@@ -108,7 +108,7 @@ P001: Shell Execution
 
 ### AST-Aware Analysis
 
-Tree-sitter parses JS/TS into an AST for two-pass import-aware detection:
+Tree-sitter parses JS/TS/Python into an AST for import-aware detection:
 
 1. **Pass 1:** Find `require('child_process')` / `import` statements and track aliases
 2. **Pass 2:** Flag exec/spawn calls only on those aliases
@@ -161,6 +161,7 @@ Block commits containing hardcoded secrets:
 ```sh
 depsec setup --hook     # Install git pre-commit hook
 depsec setup --unhook   # Remove it
+depsec scan --staged    # Manually run on staged files only
 ```
 
 ### Deep Package Audit
@@ -170,6 +171,7 @@ LLM-powered 4-phase analysis of a specific package:
 ```sh
 depsec audit shelljs              # Deep audit
 depsec audit shelljs --dry-run    # Preview capabilities
+depsec audit shelljs --budget 2.0 # Cap LLM spend at $2.00
 ```
 
 ### Protected Installs
@@ -178,7 +180,10 @@ Safe package installs with preflight checks, network monitoring, and file watchd
 
 ```sh
 depsec protect npm install lodash              # full protection
-depsec protect --preflight-only npm install     # just typosquatting checks
+depsec protect --sandbox npm install lodash    # sandboxed install (bubblewrap/sandbox-exec/docker)
+depsec protect --learn npm install lodash      # record expected connections as baseline
+depsec protect --strict npm test               # fail on unexpected connections
+depsec protect --preflight-only npm install    # just typosquatting checks
 ```
 
 ## Usage
@@ -221,6 +226,10 @@ depsec scorecard .          # Generate SVG scorecard image
 depsec badge .              # Output badge markdown
 depsec cache stats          # Show triage cache statistics
 depsec cache clear          # Clear cached triage results
+depsec attestation verify . # Verify install attestation
+depsec attestation summary .# Show attestation summary
+depsec rules update         # Download community rules
+depsec rules list           # List active rules
 ```
 
 ## Check Modules
@@ -284,6 +293,33 @@ AWS keys, GitHub tokens (classic/fine-grained/app), private keys, JWTs, Slack we
 | H003 | Lockfile committed (not gitignored) |
 | H004 | Branch protection on main (requires `GITHUB_TOKEN`) |
 
+### Capabilities (10 pts)
+
+Detects dangerous capability combinations across packages:
+
+| Rule | What it catches |
+|------|----------------|
+| CAP:credential-exfiltration | Credential reads + network access in same package |
+| CAP:dropper | Network download + shell execution |
+| CAP:data-theft | Environment/file reads + network exfiltration |
+| CAP:reverse-shell | Network + shell + dynamic execution |
+| CAP:crypto-miner | High CPU patterns + network + obfuscation |
+| CAP:ransomware | File system writes + crypto + network |
+| CAP:persistence | Startup injection + shell execution |
+| CAP:supply-chain | Install hooks + network + shell execution |
+
+### External Rules
+
+Download and apply community detection rules:
+
+```sh
+depsec rules update        # Download rules from community repo
+depsec rules list          # Show active rules
+depsec rules add rule.toml # Add a custom rule file
+```
+
+External rules are applied automatically during `depsec scan` and `depsec ci`.
+
 ## Configuration
 
 Create `depsec.toml` in your project root:
@@ -301,7 +337,7 @@ skip_dirs = ["legacy-vendor"]            # Extra dirs to skip in pattern scan
 shelljs = ["DEPSEC-P001"]               # Allow P001 for shelljs specifically
 
 [checks]
-enabled = ["workflows", "deps", "patterns", "secrets", "hygiene"]
+enabled = ["workflows", "deps", "patterns", "secrets", "hygiene", "capabilities"]
 
 [scoring]
 workflows = 25
@@ -309,7 +345,8 @@ deps = 20
 patterns = 10
 secrets = 25
 hygiene = 10
-network = 10
+capabilities = 10
+external_rules = 0                        # Opt-in: weight for custom rules
 
 [triage]
 api_key_env = "OPENROUTER_API_KEY"       # Env var containing API key
@@ -336,7 +373,7 @@ cache_ttl_days = 30
 | Secrets (regex) | 20 patterns | 800+ patterns | 800+ detectors | - |
 | Secrets (AST+entropy) | Yes | - | - | - |
 | Malware detection | 15 pattern rules | - | - | Yes |
-| AST-aware analysis | tree-sitter | - | - | semgrep |
+| AST-aware analysis | tree-sitter (JS/TS/Python) | - | - | semgrep |
 | Vulnerability scan | OSV (all ecosystems) | - | - | - |
 | Workflow security | 5 rules | - | - | - |
 | Network monitoring | Yes | - | - | - |

@@ -7,7 +7,7 @@ pub fn install() -> ExitCode {
         return ExitCode::from(2);
     }
     let hook_path = git_hooks.join("pre-commit");
-    let hook_content = "#!/bin/sh\n# depsec pre-commit hook — blocks commits with hardcoded secrets\nexec depsec secrets-check --staged\n";
+    let hook_content = "#!/bin/sh\n# depsec pre-commit hook — blocks commits with hardcoded secrets\nexec depsec scan --staged --checks secrets\n";
     match std::fs::write(&hook_path, hook_content) {
         Ok(()) => {
             #[cfg(unix)]

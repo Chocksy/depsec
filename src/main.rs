@@ -192,14 +192,13 @@ enum Commands {
         action: CacheAction,
     },
 
-    // ── Hidden (backward compat) ───────────────────────────────
     /// Manage build attestations
-    #[command(hide = true)]
     Attestation {
         #[command(subcommand)]
         action: AttestationAction,
     },
 
+    // ── Hidden (backward compat) ───────────────────────────────
     /// [deprecated] Use 'depsec protect' instead
     #[command(hide = true)]
     Monitor {
@@ -374,18 +373,18 @@ fn main() -> ExitCode {
 
         Commands::Protect {
             json,
-            sandbox: _,
-            learn: _,
-            strict: _,
+            sandbox,
+            learn,
+            strict,
             preflight_only,
             command,
         } => commands::protect::run(
             &command,
             &commands::protect::ProtectOpts {
                 json,
-                sandbox: false,
-                learn: false,
-                strict: false,
+                sandbox,
+                learn,
+                strict,
                 preflight_only,
             },
         ),
@@ -446,13 +445,13 @@ fn main() -> ExitCode {
             package,
             path,
             dry_run,
-            budget: _,
+            budget,
         } => {
             let root = match canonicalize_or_exit(&path) {
                 Ok(r) => r,
                 Err(e) => return e,
             };
-            commands::audit_cmd::run(&package, &root, dry_run, color)
+            commands::audit_cmd::run(&package, &root, dry_run, color, budget)
         }
 
         Commands::Rules { action } => match action {
