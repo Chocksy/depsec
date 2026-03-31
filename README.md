@@ -8,7 +8,7 @@ Detects vulnerable dependencies, malicious code patterns, hardcoded secrets, wor
 [![DepSec Score](https://img.shields.io/badge/depsec-A-brightgreen)](https://github.com/chocksy/depsec)
 [![crates.io](https://img.shields.io/crates/v/depsec)](https://crates.io/crates/depsec)
 
-<img src="depsec-scorecard.svg" width="480">
+<img src="depsec-scorecard.svg" width="100%">
 
 ## Benchmark
 
