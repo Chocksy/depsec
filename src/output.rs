@@ -415,11 +415,7 @@ fn render_deps_summary(
     // Group by package for collapsed view
     let mut by_package: BTreeMap<String, Vec<&Finding>> = BTreeMap::new();
     for f in findings {
-        let pkg = f
-            .package
-            .as_deref()
-            .unwrap_or("unknown")
-            .to_string();
+        let pkg = f.package.as_deref().unwrap_or("unknown").to_string();
         by_package.entry(pkg).or_default().push(f);
     }
 
@@ -433,8 +429,16 @@ fn render_deps_summary(
     // Show top packages by severity (max 8, then collapse)
     let mut sorted_pkgs: Vec<(&String, &Vec<&Finding>)> = by_package.iter().collect();
     sorted_pkgs.sort_by(|a, b| {
-        let max_a = a.1.iter().map(|f| f.severity).max().unwrap_or(Severity::Low);
-        let max_b = b.1.iter().map(|f| f.severity).max().unwrap_or(Severity::Low);
+        let max_a =
+            a.1.iter()
+                .map(|f| f.severity)
+                .max()
+                .unwrap_or(Severity::Low);
+        let max_b =
+            b.1.iter()
+                .map(|f| f.severity)
+                .max()
+                .unwrap_or(Severity::Low);
         max_b.cmp(&max_a).then(b.1.len().cmp(&a.1.len()))
     });
 
@@ -452,9 +456,7 @@ fn render_deps_summary(
             Severity::Medium => "medium",
             Severity::Low => "low",
         };
-        out.push_str(&format!(
-            "    {dim}{pkg} — {count} {sev_label}{reset}\n",
-        ));
+        out.push_str(&format!("    {dim}{pkg} — {count} {sev_label}{reset}\n",));
     }
 
     if sorted_pkgs.len() > show_count {

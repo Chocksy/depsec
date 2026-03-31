@@ -180,11 +180,11 @@ const BINARY_EXTENSIONS: &[&str] = &[
 
 /// Extensions that produce false positives — metadata/declarations, not executable code
 const SKIP_EXTENSIONS: &[&str] = &[
-    ".map",          // source maps — stringified source, never executed
-    ".d.ts",         // TypeScript declarations — type definitions only
-    ".d.mts",        // module declaration files
-    ".d.cts",        // CommonJS declaration files
-    ".tsbuildinfo",  // TypeScript build cache — hashes/metadata, never executable
+    ".map",         // source maps — stringified source, never executed
+    ".d.ts",        // TypeScript declarations — type definitions only
+    ".d.mts",       // module declaration files
+    ".d.cts",       // CommonJS declaration files
+    ".tsbuildinfo", // TypeScript build cache — hashes/metadata, never executable
 ];
 
 /// Directory names inside dep dirs that should be skipped entirely.
@@ -347,9 +347,8 @@ impl Check for PatternsCheck {
                 // Pre-compute whether this file has any dangerous exec module
                 // for P001 gating — if a JS/TS file doesn't mention child_process etc.,
                 // regex.exec()/db.exec() are always benign, skip P001 entirely.
-                let has_dangerous_exec_module = DANGEROUS_EXEC_MODULES
-                    .iter()
-                    .any(|m| content.contains(m));
+                let has_dangerous_exec_module =
+                    DANGEROUS_EXEC_MODULES.iter().any(|m| content.contains(m));
 
                 // Regex patterns — skip AST-handled rules for JS/TS files
                 for (line_num, line) in content.lines().enumerate() {
@@ -539,8 +538,7 @@ fn is_js_or_ts(path: &Path) -> bool {
 
 /// Dangerous exec modules whose presence justifies P001 regex matching.
 /// Without these, exec() calls are benign (regex.exec, db.exec, cursor.exec).
-const DANGEROUS_EXEC_MODULES: &[&str] =
-    &["child_process", "shelljs", "execa", "cross-spawn"];
+const DANGEROUS_EXEC_MODULES: &[&str] = &["child_process", "shelljs", "execa", "cross-spawn"];
 
 fn is_binary_ext(path: &Path) -> bool {
     match path.extension().and_then(|e| e.to_str()) {

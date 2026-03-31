@@ -203,10 +203,7 @@ fn query_osv_batch_url(packages: &[Package], osv_url: &str) -> anyhow::Result<Ve
                         all_findings.push(
                             Finding::new(rule_id, severity, message)
                                 .with_suggestion(suggestion)
-                                .with_package(Some(format!(
-                                    "{}@{}",
-                                    pkg.name, pkg.version
-                                ))),
+                                .with_package(Some(format!("{}@{}", pkg.name, pkg.version))),
                         );
                     }
                 }

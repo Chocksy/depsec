@@ -163,15 +163,27 @@ fn pseudo_random_chars(seed: u64, len: usize, charset: &[u8]) -> String {
 }
 
 fn pseudo_random_string(seed: u64, len: usize) -> String {
-    pseudo_random_chars(seed, len, b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
+    pseudo_random_chars(
+        seed,
+        len,
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+    )
 }
 
 fn pseudo_random_alphanum(seed: u64, len: usize) -> String {
-    pseudo_random_chars(seed, len, b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")
+    pseudo_random_chars(
+        seed,
+        len,
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
+    )
 }
 
 fn pseudo_random_base64(seed: u64, len: usize) -> String {
-    pseudo_random_chars(seed, len, b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
+    pseudo_random_chars(
+        seed,
+        len,
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/",
+    )
 }
 
 fn base64_lines(data: &str, line_len: usize) -> String {
