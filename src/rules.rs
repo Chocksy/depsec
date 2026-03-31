@@ -194,7 +194,7 @@ pub fn list_rules(root: &Path) {
 
     println!("Built-in rules:");
     println!("  DEPSEC-W001..W005  Workflow security (5 rules)");
-    println!("  DEPSEC-P001..P012  Malicious patterns (10 rules)");
+    println!("  DEPSEC-P001..P017  Malicious patterns (15 rules)");
     println!("  DEPSEC-S001..S020  Secret detection (20 rules)");
     println!("  DEPSEC-H001..H004  Repo hygiene (4 rules)");
     println!("  DEPSEC-T001..T007  Trust/metadata (7 rules)");

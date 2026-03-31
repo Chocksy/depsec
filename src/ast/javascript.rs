@@ -41,6 +41,12 @@ pub fn analyze(parser: &mut Parser, source: &str) -> Vec<AstFinding> {
     // P008: Find new Function() with variable args
     find_dynamic_function(&tree, source_bytes, &mut findings);
 
+    // P013: Find require() with non-literal arguments (dynamic require)
+    find_dynamic_require(&tree, source_bytes, &mut findings);
+
+    // P014: Find dense String.fromCharCode usage (deobfuscation routines)
+    find_deobfuscation_patterns(&tree, source_bytes, &mut findings);
+
     findings
 }
 
@@ -424,6 +430,143 @@ fn find_dynamic_function(tree: &tree_sitter::Tree, source: &[u8], findings: &mut
     }
 }
 
+/// P013: Find require() calls with non-literal arguments (dynamic require)
+/// Almost never legitimate in production dependencies — strong malware indicator.
+fn find_dynamic_require(tree: &tree_sitter::Tree, source: &[u8], findings: &mut Vec<AstFinding>) {
+    // Match all require() calls
+    let query = Query::new(
+        &tree.language(),
+        r#"
+        (call_expression
+          function: (identifier) @fn
+          arguments: (arguments . (_) @arg)
+          (#eq? @fn "require"))
+        "#,
+    );
+
+    if let Ok(query) = query {
+        let fn_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "fn")
+            .unwrap();
+        let arg_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "arg")
+            .unwrap();
+
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), source);
+
+        while let Some(m) = matches.next() {
+            let fn_cap = m.captures.iter().find(|c| c.index as usize == fn_idx);
+            let arg_cap = m.captures.iter().find(|c| c.index as usize == arg_idx);
+            let (Some(fn_cap), Some(arg_cap)) = (fn_cap, arg_cap) else {
+                continue;
+            };
+
+            let arg_kind = arg_cap.node.kind();
+
+            // Skip string literals — those are normal require('module') calls
+            if arg_kind == "string" || arg_kind == "string_fragment" {
+                continue;
+            }
+
+            // Skip static template strings without interpolation
+            if arg_kind == "template_string" {
+                let mut child_cursor = arg_cap.node.walk();
+                let has_substitution = arg_cap
+                    .node
+                    .children(&mut child_cursor)
+                    .any(|c| c.kind() == "template_substitution");
+                if !has_substitution {
+                    continue;
+                }
+            }
+
+            // Everything else is a dynamic require — flag it
+            let (severity, arg_label) = match arg_kind {
+                "call_expression" => (Severity::Critical, "function call"),
+                "subscript_expression" | "member_expression" => {
+                    (Severity::Critical, "computed expression")
+                }
+                "binary_expression" => (Severity::High, "concatenation"),
+                "template_string" => (Severity::High, "interpolated template"),
+                "identifier" => (Severity::High, "variable"),
+                _ => (Severity::High, "dynamic expression"),
+            };
+
+            let line = fn_cap.node.start_position().row + 1;
+
+            findings.push(AstFinding {
+                rule_id: "DEPSEC-P013".into(),
+                severity,
+                confidence: Confidence::High,
+                message: format!(
+                    "Dynamic require() with {arg_label} argument — module name computed at runtime"
+                ),
+                line,
+            });
+        }
+    }
+}
+
+/// P014 AST: Detect dense String.fromCharCode usage in function bodies (deobfuscation routines)
+/// 3+ fromCharCode calls in the same function is a strong deobfuscation signal.
+fn find_deobfuscation_patterns(
+    tree: &tree_sitter::Tree,
+    source: &[u8],
+    findings: &mut Vec<AstFinding>,
+) {
+    // Find all String.fromCharCode calls
+    let query = Query::new(
+        &tree.language(),
+        r#"
+        (call_expression
+          function: (member_expression
+            object: (identifier) @obj
+            property: (property_identifier) @prop)
+          (#eq? @obj "String")
+          (#eq? @prop "fromCharCode"))
+        "#,
+    );
+
+    if let Ok(query) = query {
+        let obj_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "obj")
+            .unwrap();
+
+        let mut cursor = QueryCursor::new();
+        let mut matches_iter = cursor.matches(&query, tree.root_node(), source);
+
+        // Collect all fromCharCode call locations
+        let mut locations: Vec<usize> = Vec::new();
+        while let Some(m) = matches_iter.next() {
+            if let Some(cap) = m.captures.iter().find(|c| c.index as usize == obj_idx) {
+                locations.push(cap.node.start_position().row + 1);
+            }
+        }
+
+        // If 3+ fromCharCode calls exist in the file, flag as deobfuscation routine
+        if locations.len() >= 3 {
+            let first_line = locations[0];
+            findings.push(AstFinding {
+                rule_id: "DEPSEC-P014".into(),
+                severity: Severity::High,
+                confidence: Confidence::High,
+                message: format!(
+                    "Dense String.fromCharCode usage ({} calls) — likely deobfuscation routine",
+                    locations.len()
+                ),
+                line: first_line,
+            });
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -596,5 +739,181 @@ mod tests {
         );
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].rule_id, "DEPSEC-P001");
+    }
+
+    // --- P013: Dynamic Require tests ---
+
+    #[test]
+    fn test_dynamic_require_variable() {
+        let findings = parse_js(
+            r#"
+            const x = decode(stq[0]);
+            const mod = require(x);
+        "#,
+        );
+        let p013: Vec<_> = findings
+            .iter()
+            .filter(|f| f.rule_id == "DEPSEC-P013")
+            .collect();
+        assert_eq!(p013.len(), 1);
+        assert_eq!(p013[0].severity, Severity::High);
+        assert_eq!(p013[0].confidence, Confidence::High);
+    }
+
+    #[test]
+    fn test_dynamic_require_function_call() {
+        let findings = parse_js(
+            r#"
+            const t = require(decode(stq[2], ord));
+        "#,
+        );
+        let p013: Vec<_> = findings
+            .iter()
+            .filter(|f| f.rule_id == "DEPSEC-P013")
+            .collect();
+        assert_eq!(p013.len(), 1);
+        assert_eq!(p013[0].severity, Severity::Critical);
+        assert!(p013[0].message.contains("function call"));
+    }
+
+    #[test]
+    fn test_dynamic_require_subscript() {
+        let findings = parse_js(
+            r#"
+            const m = require(modules[0]);
+        "#,
+        );
+        let p013: Vec<_> = findings
+            .iter()
+            .filter(|f| f.rule_id == "DEPSEC-P013")
+            .collect();
+        assert_eq!(p013.len(), 1);
+        assert_eq!(p013[0].severity, Severity::Critical);
+    }
+
+    #[test]
+    fn test_dynamic_require_concatenation() {
+        let findings = parse_js(
+            r#"
+            const m = require('./' + moduleName);
+        "#,
+        );
+        let p013: Vec<_> = findings
+            .iter()
+            .filter(|f| f.rule_id == "DEPSEC-P013")
+            .collect();
+        assert_eq!(p013.len(), 1);
+        assert_eq!(p013[0].severity, Severity::High);
+        assert!(p013[0].message.contains("concatenation"));
+    }
+
+    #[test]
+    fn test_dynamic_require_template_interpolation() {
+        let findings = parse_js(
+            r#"
+            const m = require(`${prefix}/module`);
+        "#,
+        );
+        let p013: Vec<_> = findings
+            .iter()
+            .filter(|f| f.rule_id == "DEPSEC-P013")
+            .collect();
+        assert_eq!(p013.len(), 1);
+        assert_eq!(p013[0].severity, Severity::High);
+    }
+
+    #[test]
+    fn test_static_require_not_flagged() {
+        let findings = parse_js(
+            r#"
+            const fs = require('fs');
+            const path = require("path");
+        "#,
+        );
+        let p013: Vec<_> = findings
+            .iter()
+            .filter(|f| f.rule_id == "DEPSEC-P013")
+            .collect();
+        assert!(p013.is_empty(), "Static require should NOT be flagged");
+    }
+
+    #[test]
+    fn test_static_template_require_not_flagged() {
+        let findings = parse_js(
+            r#"
+            const m = require(`fs`);
+        "#,
+        );
+        let p013: Vec<_> = findings
+            .iter()
+            .filter(|f| f.rule_id == "DEPSEC-P013")
+            .collect();
+        assert!(
+            p013.is_empty(),
+            "Static template require should NOT be flagged"
+        );
+    }
+
+    #[test]
+    fn test_axios_payload_pattern() {
+        // Mimics the actual axios attack pattern
+        let findings = parse_js(
+            r#"
+            const stq = ["encoded1", "encoded2", "encoded3"];
+            function _trans(x, r) {
+                let S = Buffer.from(x, "base64").toString("utf8");
+                return String.fromCharCode(S.charCodeAt(0) ^ 333);
+            }
+            const t = require(_trans(stq[0], "key"));
+            const W = require(_trans(stq[1], "key"));
+        "#,
+        );
+        let p013: Vec<_> = findings
+            .iter()
+            .filter(|f| f.rule_id == "DEPSEC-P013")
+            .collect();
+        assert_eq!(
+            p013.len(),
+            2,
+            "Should flag both dynamic require() calls in axios-style payload"
+        );
+        assert!(p013.iter().all(|f| f.severity == Severity::Critical));
+    }
+
+    // --- P014: Deobfuscation Pattern tests ---
+
+    #[test]
+    fn test_dense_fromcharcode_flagged() {
+        let findings = parse_js(
+            r#"
+            function decode(s) {
+                var r = String.fromCharCode(s.charCodeAt(0) ^ 42);
+                r += String.fromCharCode(s.charCodeAt(1) ^ 42);
+                r += String.fromCharCode(s.charCodeAt(2) ^ 42);
+                return r;
+            }
+        "#,
+        );
+        let p014: Vec<_> = findings
+            .iter()
+            .filter(|f| f.rule_id == "DEPSEC-P014")
+            .collect();
+        assert_eq!(p014.len(), 1);
+        assert_eq!(p014[0].confidence, Confidence::High);
+        assert!(p014[0].message.contains("3 calls"));
+    }
+
+    #[test]
+    fn test_single_fromcharcode_not_flagged() {
+        let findings = parse_js(
+            r#"
+            var ch = String.fromCharCode(65);
+        "#,
+        );
+        let p014: Vec<_> = findings
+            .iter()
+            .filter(|f| f.rule_id == "DEPSEC-P014")
+            .collect();
+        assert!(p014.is_empty(), "Single fromCharCode should NOT be flagged");
     }
 }
