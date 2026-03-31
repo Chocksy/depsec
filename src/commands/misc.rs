@@ -172,7 +172,15 @@ pub fn scorecard(root: &Path, output: &Path) -> ExitCode {
 pub fn install_guard(command: &[String], json: bool) -> ExitCode {
     let root = std::env::current_dir().unwrap_or_else(|_| ".".into());
     let config = config::load_config(&root);
-    match install_guard::run_install_guard(command, &root, &config.install, json, false, false, false) {
+    match install_guard::run_install_guard(
+        command,
+        &root,
+        &config.install,
+        json,
+        false,
+        false,
+        false,
+    ) {
         Ok(result) => {
             if result.has_issues {
                 ExitCode::from(1)

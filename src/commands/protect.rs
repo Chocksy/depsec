@@ -49,7 +49,10 @@ pub fn run(command: &[String], opts: &ProtectOpts) -> ExitCode {
     ) {
         Ok(result) => {
             if opts.json {
-                println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&result).unwrap_or_default()
+                );
             }
             if result.has_issues {
                 ExitCode::from(1)

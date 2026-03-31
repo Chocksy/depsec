@@ -24,7 +24,10 @@ impl Spinner {
         let cyan = "\x1b[36m";
         let dim = "\x1b[90m";
         let reset = "\x1b[0m";
-        eprint!("\r  {cyan}{}{reset} {message} {dim}(0s){reset}   ", FRAMES[0]);
+        eprint!(
+            "\r  {cyan}{}{reset} {message} {dim}(0s){reset}   ",
+            FRAMES[0]
+        );
         let _ = std::io::stderr().flush();
 
         let stop_clone = stop.clone();

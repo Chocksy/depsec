@@ -520,7 +520,8 @@ Respond with JSON: {{"verdict": "CONFIRMED|DEBUNKED", "reasoning": "..."}}"#,
             match crate::llm::chat_json::<VerifyResponse>(client, &messages) {
                 Ok((verify, usage)) => {
                     total_tokens += usage.total_tokens;
-                    total_cost += client.estimate_cost(usage.prompt_tokens, usage.completion_tokens);
+                    total_cost +=
+                        client.estimate_cost(usage.prompt_tokens, usage.completion_tokens);
                     if verify.verdict.to_uppercase().contains("CONFIRMED") {
                         finding.verified = true;
                     }

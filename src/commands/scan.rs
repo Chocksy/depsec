@@ -19,7 +19,10 @@ pub fn run(root: &Path, opts: &ScanOpts) -> ExitCode {
     let config = config::load_config(root);
 
     // Print banner before spinner so terminal isn't blank during scan
-    let is_human = opts.format.unwrap_or(if opts.json { "json" } else { "human" }) == "human";
+    let is_human = opts
+        .format
+        .unwrap_or(if opts.json { "json" } else { "human" })
+        == "human";
     if is_human {
         eprintln!(
             "depsec v{} \u{2014} Supply Chain Security Scanner\n",

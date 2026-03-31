@@ -208,11 +208,7 @@ fn find_dangerous_builtins(
 }
 
 /// P021: subprocess with shell=True
-fn find_subprocess_shell(
-    tree: &tree_sitter::Tree,
-    source: &[u8],
-    findings: &mut Vec<AstFinding>,
-) {
+fn find_subprocess_shell(tree: &tree_sitter::Tree, source: &[u8], findings: &mut Vec<AstFinding>) {
     // Match subprocess.Popen/call/run/check_output with shell=True
     let query = Query::new(
         &tree.language(),
@@ -241,10 +237,7 @@ fn find_subprocess_shell(
         let mut matches = cursor.matches(&query, tree.root_node(), source);
 
         while let Some(m) = matches.next() {
-            let method_cap = m
-                .captures
-                .iter()
-                .find(|c| c.index as usize == method_idx);
+            let method_cap = m.captures.iter().find(|c| c.index as usize == method_idx);
             let Some(method_cap) = method_cap else {
                 continue;
             };
@@ -290,10 +283,7 @@ fn find_os_system(tree: &tree_sitter::Tree, source: &[u8], findings: &mut Vec<As
         let mut matches = cursor.matches(&query, tree.root_node(), source);
 
         while let Some(m) = matches.next() {
-            let method_cap = m
-                .captures
-                .iter()
-                .find(|c| c.index as usize == method_idx);
+            let method_cap = m.captures.iter().find(|c| c.index as usize == method_idx);
             let Some(method_cap) = method_cap else {
                 continue;
             };
@@ -463,7 +453,10 @@ mod tests {
     #[test]
     fn test_eval_variable_flagged() {
         let findings = parse_py("result = eval(user_input)");
-        let p020: Vec<_> = findings.iter().filter(|f| f.rule_id == "DEPSEC-P020").collect();
+        let p020: Vec<_> = findings
+            .iter()
+            .filter(|f| f.rule_id == "DEPSEC-P020")
+            .collect();
         assert_eq!(p020.len(), 1);
         assert_eq!(p020[0].severity, Severity::High);
     }
@@ -471,14 +464,20 @@ mod tests {
     #[test]
     fn test_exec_variable_flagged() {
         let findings = parse_py("exec(code_string)");
-        let p020: Vec<_> = findings.iter().filter(|f| f.rule_id == "DEPSEC-P020").collect();
+        let p020: Vec<_> = findings
+            .iter()
+            .filter(|f| f.rule_id == "DEPSEC-P020")
+            .collect();
         assert_eq!(p020.len(), 1);
     }
 
     #[test]
     fn test_eval_static_string_medium() {
         let findings = parse_py(r#"result = eval("1 + 2")"#);
-        let p020: Vec<_> = findings.iter().filter(|f| f.rule_id == "DEPSEC-P020").collect();
+        let p020: Vec<_> = findings
+            .iter()
+            .filter(|f| f.rule_id == "DEPSEC-P020")
+            .collect();
         assert_eq!(p020.len(), 1);
         assert_eq!(p020[0].severity, Severity::Medium);
     }
@@ -488,14 +487,20 @@ mod tests {
     #[test]
     fn test_subprocess_shell_true() {
         let findings = parse_py(r#"subprocess.Popen(cmd, shell=True)"#);
-        let p021: Vec<_> = findings.iter().filter(|f| f.rule_id == "DEPSEC-P021").collect();
+        let p021: Vec<_> = findings
+            .iter()
+            .filter(|f| f.rule_id == "DEPSEC-P021")
+            .collect();
         assert_eq!(p021.len(), 1);
     }
 
     #[test]
     fn test_subprocess_call_shell_true() {
         let findings = parse_py(r#"subprocess.call(cmd, shell=True)"#);
-        let p021: Vec<_> = findings.iter().filter(|f| f.rule_id == "DEPSEC-P021").collect();
+        let p021: Vec<_> = findings
+            .iter()
+            .filter(|f| f.rule_id == "DEPSEC-P021")
+            .collect();
         assert_eq!(p021.len(), 1);
     }
 
@@ -504,14 +509,20 @@ mod tests {
     #[test]
     fn test_os_system_flagged() {
         let findings = parse_py(r#"os.system("rm -rf /")"#);
-        let p022: Vec<_> = findings.iter().filter(|f| f.rule_id == "DEPSEC-P022").collect();
+        let p022: Vec<_> = findings
+            .iter()
+            .filter(|f| f.rule_id == "DEPSEC-P022")
+            .collect();
         assert_eq!(p022.len(), 1);
     }
 
     #[test]
     fn test_os_popen_flagged() {
         let findings = parse_py(r#"os.popen(cmd)"#);
-        let p022: Vec<_> = findings.iter().filter(|f| f.rule_id == "DEPSEC-P022").collect();
+        let p022: Vec<_> = findings
+            .iter()
+            .filter(|f| f.rule_id == "DEPSEC-P022")
+            .collect();
         assert_eq!(p022.len(), 1);
     }
 
@@ -520,7 +531,10 @@ mod tests {
     #[test]
     fn test_dynamic_import_variable() {
         let findings = parse_py("mod = __import__(module_name)");
-        let p023: Vec<_> = findings.iter().filter(|f| f.rule_id == "DEPSEC-P023").collect();
+        let p023: Vec<_> = findings
+            .iter()
+            .filter(|f| f.rule_id == "DEPSEC-P023")
+            .collect();
         assert_eq!(p023.len(), 1);
         assert_eq!(p023[0].severity, Severity::Critical);
     }
@@ -528,7 +542,10 @@ mod tests {
     #[test]
     fn test_static_import_medium() {
         let findings = parse_py(r#"mod = __import__("os")"#);
-        let p023: Vec<_> = findings.iter().filter(|f| f.rule_id == "DEPSEC-P023").collect();
+        let p023: Vec<_> = findings
+            .iter()
+            .filter(|f| f.rule_id == "DEPSEC-P023")
+            .collect();
         assert_eq!(p023.len(), 1);
         assert_eq!(p023[0].severity, Severity::Medium);
     }
@@ -538,10 +555,16 @@ mod tests {
     #[test]
     fn test_extract_simple_assignment() {
         let mut parser = new_parser();
-        let results = extract_assignments(&mut parser, r#"DATABASE_HOST = "postgres-main-replica-east.internal.example.com""#);
+        let results = extract_assignments(
+            &mut parser,
+            r#"DATABASE_HOST = "postgres-main-replica-east.internal.example.com""#,
+        );
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, "DATABASE_HOST");
-        assert_eq!(results[0].1, "postgres-main-replica-east.internal.example.com");
+        assert_eq!(
+            results[0].1,
+            "postgres-main-replica-east.internal.example.com"
+        );
     }
 
     #[test]

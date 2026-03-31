@@ -78,13 +78,13 @@ pub fn run_install_guard(
         let sandbox_type = sandbox::detect_sandbox(sandbox_pref);
         if sandbox_type != sandbox::SandboxType::None {
             // Plant canary tokens in a temp home for honeypot detection
-            let canary_dir = std::env::temp_dir().join(format!("depsec-canary-{}", std::process::id()));
+            let canary_dir =
+                std::env::temp_dir().join(format!("depsec-canary-{}", std::process::id()));
             std::fs::create_dir_all(&canary_dir).context("Failed to create canary temp dir")?;
-            let tokens = crate::canary::generate_canary_tokens(&canary_dir)
-                .unwrap_or_else(|e| {
-                    eprintln!("  \x1b[33m⚠\x1b[0m Canary token generation failed: {e}");
-                    vec![]
-                });
+            let tokens = crate::canary::generate_canary_tokens(&canary_dir).unwrap_or_else(|e| {
+                eprintln!("  \x1b[33m⚠\x1b[0m Canary token generation failed: {e}");
+                vec![]
+            });
 
             if !tokens.is_empty() {
                 eprintln!(
@@ -191,9 +191,7 @@ pub fn run_install_guard(
                 );
             }
         } else {
-            eprintln!(
-                "\x1b[1m[depsec protect]\x1b[0m \x1b[32m✓ Install completed cleanly\x1b[0m"
-            );
+            eprintln!("\x1b[1m[depsec protect]\x1b[0m \x1b[32m✓ Install completed cleanly\x1b[0m");
         }
     }
 
