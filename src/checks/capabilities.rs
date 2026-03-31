@@ -876,4 +876,220 @@ mod tests {
             .iter()
             .any(|f| f.rule_id.contains("dropper") || f.rule_id.contains("install")));
     }
+
+    // =========================================================================
+    // GOLDEN TEST: axios/plain-crypto-js supply chain attack (sanitized)
+    //
+    // This test recreates the ACTUAL structure of the 2026-03-31 axios attack
+    // where plain-crypto-js@4.2.1 was injected as a dependency. The payload:
+    // - Uses 2-layer obfuscation (XOR + reversed base64)
+    // - Dynamically loads fs, os, child_process via require(decode(...))
+    // - Destructures execSync as F, calls F(s)
+    // - Self-deletes setup.js and replaces package.json
+    // - Has a postinstall hook
+    //
+    // All network calls, file writes, and exec calls are INERT in this test.
+    // The test verifies that depsec's detection pipeline catches the attack.
+    // =========================================================================
+
+    /// The sanitized payload mimicking plain-crypto-js setup.js
+    const AXIOS_PAYLOAD: &str = r#"
+// Sanitized version of plain-crypto-js@4.2.1 setup.js
+// Original: https://socket.dev/blog/axios-npm-package-compromised
+// All dangerous calls replaced with inert equivalents for testing.
+
+const stq = [
+    "_kLx+SMgE7Kx1S8vE3LxSSCqEHKxjScp7Kx_gvELKx_gvEvKx",
+    "_oaxtWcrF3axHMqEnLxhSMrEvIxqWcoF3bxtWcoF_axsSof3axvMqFxIlxZSMjEJ3xsSCm",
+    "_iWSuF3bx9WctFDbxgSsoE7KxjWspEvKchSsrE_LxsSsvELaxiW8tF3Lx+ScuEXKx",
+    "_wVF7bxkSMpErLx_jSMpErLx4SMrEnKx"
+];
+
+const_trans_1 = function(x, r) {
+    try {
+        const E = r.split("").map(Number);
+        return x.split("").map((k, r) => {
+            const S = x.charCodeAt(r);
+            a = E[7 * r * r % 10];
+            return String.fromCharCode(S ^ a ^ 333);
+        }).join("");
+    } catch {}
+};
+
+_trans_2 = function(x, r) {
+    try {
+        let E = x.split("").reverse().join("").replaceAll("_", "=");
+        S = Buffer.from(E, "base64").toString("utf8");
+        return _trans_1(S, r);
+    } catch {}
+};
+
+ord = "OrDeR_7077";
+
+_entry = function(x) {
+    try {
+        let r = 4027,
+            E = (r.toString().charCodeAt(2), String.fromCharCode(S ^ a ^ 333)),
+            t = require(_trans_2(stq[2], ord)),
+            W = require(_trans_2(stq[1], ord)),
+            {
+                execSync: F
+            } = require(_trans_2(stq[0], ord));
+
+        // SANITIZED: Original code stages payloads and executes them.
+        // Replaced with inert variable assignments for testing.
+        var o = W.platform(),
+            e = W.tmpdir(),
+            q = "test_payload",
+            n = "test_artifact";
+
+        // SANITIZED: Original deletes setup.js and renames package.md
+        t.unlinkSync(__filename);
+        // t.renameSync('package.md', 'package.json');
+    } catch {}
+};
+"#;
+
+    #[test]
+    fn test_axios_attack_full_pipeline_patterns() {
+        // Test the patterns check catches the axios payload
+        let dir = tempfile::TempDir::new().unwrap();
+        let pkg_dir = dir.path().join("node_modules/plain-crypto-js");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(pkg_dir.join("setup.js"), AXIOS_PAYLOAD).unwrap();
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            r#"{"name":"plain-crypto-js","version":"4.2.1","scripts":{"postinstall":"node setup.js"}}"#,
+        )
+        .unwrap();
+
+        let config = crate::config::Config::default();
+        let ctx = ScanContext {
+            root: dir.path(),
+            config: &config,
+        };
+        let result = crate::checks::patterns::PatternsCheck.run(&ctx).unwrap();
+
+        // Collect all rule IDs that fired
+        let rule_ids: Vec<&str> = result.findings.iter().map(|f| f.rule_id.as_str()).collect();
+
+        // P013: Dynamic require() — the killer signal
+        assert!(
+            rule_ids.iter().any(|r| *r == "DEPSEC-P013"),
+            "P013 (dynamic require) should fire on require(_trans_2(...)). Got: {:?}",
+            rule_ids
+        );
+
+        // P014: String deobfuscation (fromCharCode + XOR)
+        assert!(
+            rule_ids.iter().any(|r| *r == "DEPSEC-P014"),
+            "P014 (deobfuscation) should fire on String.fromCharCode(S ^ a ^ 333). Got: {:?}",
+            rule_ids
+        );
+
+        // P015: Anti-forensic self-deletion
+        assert!(
+            rule_ids.iter().any(|r| *r == "DEPSEC-P015"),
+            "P015 (anti-forensic) should fire on unlinkSync(__filename). Got: {:?}",
+            rule_ids
+        );
+
+        // P016: Dependency install script
+        assert!(
+            rule_ids.iter().any(|r| *r == "DEPSEC-P016"),
+            "P016 (dep install script) should fire on postinstall hook. Got: {:?}",
+            rule_ids
+        );
+
+        // P013 should be ESCALATED due to signal combination with P014
+        let escalated = result
+            .findings
+            .iter()
+            .any(|f| f.rule_id == "DEPSEC-P013" && f.message.contains("ESCALATED"));
+        assert!(
+            escalated,
+            "P013 should be ESCALATED when combined with obfuscation signals. Got: {:?}",
+            result
+                .findings
+                .iter()
+                .filter(|f| f.rule_id == "DEPSEC-P013")
+                .map(|f| &f.message)
+                .collect::<Vec<_>>()
+        );
+
+        // Verify severity — P013 escalated should be Critical
+        let critical_p013 = result
+            .findings
+            .iter()
+            .filter(|f| f.rule_id == "DEPSEC-P013" && f.severity == Severity::Critical)
+            .count();
+        assert!(
+            critical_p013 >= 1,
+            "At least one P013 should be Critical severity"
+        );
+
+        println!(
+            "\n=== AXIOS GOLDEN TEST (patterns) ===\nFindings: {} total",
+            result.findings.len()
+        );
+        for f in &result.findings {
+            println!(
+                "  [{}] {} — {}",
+                f.severity,
+                f.rule_id,
+                f.message.lines().next().unwrap_or("")
+            );
+        }
+    }
+
+    #[test]
+    fn test_axios_attack_full_pipeline_capabilities() {
+        // Test the capabilities check catches the axios payload
+        let dir = tempfile::TempDir::new().unwrap();
+        let pkg_dir = dir.path().join("node_modules/plain-crypto-js");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(pkg_dir.join("setup.js"), AXIOS_PAYLOAD).unwrap();
+        std::fs::write(
+            pkg_dir.join("package.json"),
+            r#"{"name":"plain-crypto-js","version":"4.2.1","scripts":{"postinstall":"node setup.js"}}"#,
+        )
+        .unwrap();
+
+        let config = crate::config::Config::default();
+        let ctx = ScanContext {
+            root: dir.path(),
+            config: &config,
+        };
+        let result = CapabilitiesCheck.run(&ctx).unwrap();
+
+        // Should detect capabilities
+        assert!(
+            !result.findings.is_empty(),
+            "Capabilities check should flag the axios payload. Got 0 findings."
+        );
+
+        let rule_ids: Vec<&str> = result.findings.iter().map(|f| f.rule_id.as_str()).collect();
+
+        // Should detect obfuscated-dynamic combo (C8 + C9)
+        assert!(
+            rule_ids.iter().any(|r| r.contains("obfuscated")
+                || r.contains("dynamic")
+                || r.contains("install")),
+            "Should detect dangerous capability combination. Got: {:?}",
+            rule_ids
+        );
+
+        println!(
+            "\n=== AXIOS GOLDEN TEST (capabilities) ===\nFindings: {} total",
+            result.findings.len()
+        );
+        for f in &result.findings {
+            println!(
+                "  [{}] {} — {}",
+                f.severity,
+                f.rule_id,
+                f.message.lines().next().unwrap_or("")
+            );
+        }
+    }
 }
