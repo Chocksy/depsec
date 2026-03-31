@@ -23,7 +23,7 @@ Tested against **10,582 real malware packages** from the [Datadog malicious-soft
 ## Install
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/chocksy/depsec/main/install.sh | sh
+curl -fsSL https://depsec.dev/install | sh
 ```
 
 Or with Cargo:
@@ -32,6 +32,30 @@ Or with Cargo:
 cargo install depsec
 ```
 
+## AI Agent Integration
+
+depsec works with AI coding tools out of the box. Add it to your agent's context and it will scan, fix, and protect your project automatically.
+
+**Claude Code** — add to your project's `.claude/commands/`:
+
+```sh
+# Copy the skill into your project
+mkdir -p .claude/commands && cp SKILL.md .claude/commands/depsec.md
+```
+
+Or paste this into your project's `CLAUDE.md`:
+
+```markdown
+## Security Scanning
+Run `depsec scan .` before committing. Run `depsec fix .` to auto-pin GitHub Actions.
+Run `depsec protect npm install <pkg>` when installing unfamiliar packages.
+Use `depsec setup --hook` to install pre-commit secret detection.
+```
+
+**Codex / Cursor / Windsurf** — these tools read `AGENTS.md` automatically from the repo root. It's already included.
+
+**Any AgentSkills-compatible tool** — `SKILL.md` in the repo root follows the [AgentSkills](https://agentskills.io) spec.
+
 ## Quick Start
 
 ```sh
@@ -39,7 +63,7 @@ depsec scan .
 ```
 
 ```
-depsec v0.8.0 — Supply Chain Security Scanner
+depsec v0.10.0 — Supply Chain Security Scanner
 
 Project: my-app
 Grade: B (7.8/10)
@@ -135,8 +159,8 @@ depsec scan . --verbose             # Everything, no filtering
 Block commits containing hardcoded secrets:
 
 ```sh
-depsec hook install     # Install git pre-commit hook
-depsec hook uninstall   # Remove it
+depsec setup --hook     # Install git pre-commit hook
+depsec setup --unhook   # Remove it
 ```
 
 ### Deep Package Audit
@@ -148,15 +172,14 @@ depsec audit shelljs              # Deep audit
 depsec audit shelljs --dry-run    # Preview capabilities
 ```
 
-### Install Guard
+### Protected Installs
 
-Protected package installs with network monitoring:
+Safe package installs with preflight checks, network monitoring, and file watchdog:
 
 ```sh
-depsec install-guard npm install lodash
+depsec protect npm install lodash              # full protection
+depsec protect --preflight-only npm install     # just typosquatting checks
 ```
-
-Runs preflight checks, monitors network activity during install, and reports anomalies.
 
 ## Usage
 
@@ -178,29 +201,24 @@ depsec fix .            # Pin GitHub Actions to commit SHAs
 depsec fix . --dry-run  # Preview changes
 ```
 
-### Network Monitor
+### Network Monitoring
 
 ```sh
-depsec monitor npm test                  # Watch network during command
-depsec monitor --learn npm install       # Record expected connections
-depsec monitor --strict npm test         # Fail on unexpected connections
+depsec protect npm test                    # Watch network during command
+depsec protect --learn npm install         # Record expected connections
+depsec protect --strict npm test           # Fail on unexpected connections
 ```
 
-### Baseline
+### Setup & Utilities
 
 ```sh
-depsec baseline init    # Generate network baseline
-depsec baseline check   # Compare CI run against baseline
-```
-
-### Other Commands
-
-```sh
-depsec preflight .          # Pre-install threat analysis (typosquatting, metadata)
-depsec self-check           # Verify depsec's own integrity
+depsec setup --hook         # Install pre-commit hook
+depsec setup --baseline     # Generate network baseline
+depsec setup --shell        # Print shell aliases for package managers
+depsec setup --self-check   # Verify depsec binary integrity
+depsec ci .                 # CI mode (SARIF output + exit codes)
 depsec scorecard .          # Generate SVG scorecard image
 depsec badge .              # Output badge markdown
-depsec secrets-check        # Check for secrets (used by pre-commit hook)
 depsec cache stats          # Show triage cache statistics
 depsec cache clear          # Clear cached triage results
 ```
@@ -209,7 +227,7 @@ depsec cache clear          # Clear cached triage results
 
 ### Patterns (10 pts)
 
-Scans `node_modules/`, `vendor/`, `.venv/` for malicious code:
+Scans `node_modules/`, `vendor/`, `.venv/` for malicious code (15 rules):
 
 | Rule | What it catches | Severity |
 |------|----------------|----------|
@@ -219,12 +237,15 @@ Scans `node_modules/`, `vendor/`, `.venv/` for malicious code:
 | P004 | File reads targeting ~/.ssh, ~/.aws, ~/.env | Critical |
 | P005 | Binary file read → byte extraction → execution | Critical |
 | P006 | postinstall scripts with network calls | High |
-| P007 | High-entropy encoded payloads (>200 chars) | Medium |
 | P008 | `new Function()` with dynamic input (AST-aware) | High |
-| P009 | Python .pth file with executable code | Critical |
 | P010 | Cloud IMDS credential probing (169.254.169.254) | Critical |
 | P011 | Environment variable serialization/exfiltration | High |
-| P012 | Suspicious install hooks in package.json | High |
+| P013 | Dynamic require() with non-literal argument | High |
+| P014 | String.fromCharCode + XOR deobfuscation | High |
+| P015 | Anti-forensic file operations (self-deleting code) | Critical |
+| P017 | Code obfuscation (hex identifiers, infinite loops) | High |
+| P018 | Node.js internal binding access (process.binding) | Critical |
+| P019 | VM module code execution (vm.runInThisContext) | High |
 
 ### Dependencies (20 pts)
 
@@ -314,7 +335,7 @@ cache_ttl_days = 30
 |---------|--------|----------|------------|----------|
 | Secrets (regex) | 20 patterns | 800+ patterns | 800+ detectors | - |
 | Secrets (AST+entropy) | Yes | - | - | - |
-| Malware detection | 12 pattern rules | - | - | Yes |
+| Malware detection | 15 pattern rules | - | - | Yes |
 | AST-aware analysis | tree-sitter | - | - | semgrep |
 | Vulnerability scan | OSV (all ecosystems) | - | - | - |
 | Workflow security | 5 rules | - | - | - |
