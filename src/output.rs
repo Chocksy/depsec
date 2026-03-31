@@ -814,7 +814,7 @@ mod tests {
         let report = ScanReport::new("test".into(), results);
 
         // Regular persona, no verbose — low confidence should be hidden
-        let output_regular = render_human(&report, false, Persona::Regular, false);
+        let _output_regular = render_human(&report, false, Persona::Regular, false);
         // Verbose — should show all
         let output_verbose = render_human(&report, false, Persona::Regular, true);
 

@@ -364,7 +364,7 @@ fn sign_attestation(attestation: &Attestation, key: &str) -> String {
 mod tests {
     use super::*;
     use crate::monitor::{Connection, MonitorResult};
-    use crate::watchdog::{FileAlert, WriteViolation};
+    use crate::watchdog::FileAlert;
 
     fn mock_clean_result() -> MonitorResult {
         MonitorResult {

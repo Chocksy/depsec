@@ -413,7 +413,7 @@ mod tests {
 
     #[test]
     fn test_dedup_alerts() {
-        let paths = build_sensitive_paths(&[]);
+        let _paths = build_sensitive_paths(&[]);
         let mut seen = HashSet::new();
 
         // First call should produce alerts
