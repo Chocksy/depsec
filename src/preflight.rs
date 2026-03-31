@@ -350,7 +350,15 @@ fn check_typosquatting(pkg: &parsers::Package, findings: &mut Vec<Finding>) {
 
     for &top_pkg in popular {
         let distance = levenshtein(&pkg.name, top_pkg);
-        if distance > 0 && distance <= 2 {
+
+        // Scale max allowed distance by name length:
+        // Short names (1-3 chars): only exact distance 1 (typos, not unrelated words)
+        // Medium names (4-5 chars): distance ≤ 2
+        // Long names (6+): distance ≤ 2
+        let min_len = pkg.name.len().min(top_pkg.len());
+        let max_distance = if min_len <= 3 { 1 } else { 2 };
+
+        if distance > 0 && distance <= max_distance {
             findings.push(
                 Finding::new("DEPSEC-T001", Severity::High, format!(
                     "Possible typosquat: '{}' is similar to popular package '{top_pkg}' (distance: {distance})",

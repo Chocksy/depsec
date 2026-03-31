@@ -167,24 +167,43 @@ pub fn dry_run_findings(findings: &[Finding], root: &Path, config: &TriageConfig
     let mut total_chars = 0usize;
 
     for (idx, finding) in findings.iter().enumerate().take(limit) {
-        let ctx = match build_context(finding, root) {
-            Some(c) => c,
-            None => continue,
-        };
+        if let Some(ctx) = build_context(finding, root) {
+            let prompt = build_user_prompt(&ctx);
+            total_chars += prompt.len() + SYSTEM_PROMPT.len();
 
-        let prompt = build_user_prompt(&ctx);
-        total_chars += prompt.len() + SYSTEM_PROMPT.len();
+            eprintln!("--- Finding {} ---", idx + 1);
+            eprintln!("Package: {}", ctx.package_name);
+            eprintln!("File: {}:{}", ctx.file_path, ctx.line_number);
+            eprintln!("Rule: {}", ctx.rule_id);
+            eprintln!(
+                "Prompt length: {} chars (~{} tokens)",
+                prompt.len(),
+                prompt.len() / 4
+            );
+            eprintln!();
+        } else {
+            // Findings without file context (e.g., deps advisories):
+            // estimate prompt from message + suggestion text
+            let msg_len = finding.message.len()
+                + finding.suggestion.as_ref().map(|s| s.len()).unwrap_or(0)
+                + finding.package.as_ref().map(|p| p.len()).unwrap_or(0);
+            let est_prompt_len = msg_len + SYSTEM_PROMPT.len() + 200; // overhead
+            total_chars += est_prompt_len;
 
-        eprintln!("--- Finding {} ---", idx + 1);
-        eprintln!("Package: {}", ctx.package_name);
-        eprintln!("File: {}:{}", ctx.file_path, ctx.line_number);
-        eprintln!("Rule: {}", ctx.rule_id);
-        eprintln!(
-            "Prompt length: {} chars (~{} tokens)",
-            prompt.len(),
-            prompt.len() / 4
-        );
-        eprintln!();
+            eprintln!("--- Finding {} ---", idx + 1);
+            eprintln!(
+                "Package: {}",
+                finding.package.as_deref().unwrap_or("unknown")
+            );
+            eprintln!("Rule: {}", finding.rule_id);
+            eprintln!("(no source file — advisory/metadata finding)");
+            eprintln!(
+                "Prompt length: ~{} chars (~{} tokens)",
+                est_prompt_len,
+                est_prompt_len / 4
+            );
+            eprintln!();
+        }
     }
 
     let est_tokens = total_chars / 4;

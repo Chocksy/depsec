@@ -264,6 +264,7 @@ fn collect_scannable_files(root: &Path, ignore_globs: &[String]) -> Vec<std::pat
                 .filter(|l| !l.is_empty())
                 .map(|l| root.join(l))
                 .filter(|p| p.is_file())
+                .filter(|p| !is_in_hidden_dir(p, root)) // skip .cursor/, .svelte-kit/, etc.
                 .filter(|p| !is_ignored(p, root, ignore_globs))
                 .filter(|p| !is_large_file(p))
                 .collect();

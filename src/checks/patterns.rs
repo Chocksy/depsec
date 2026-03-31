@@ -180,16 +180,18 @@ const BINARY_EXTENSIONS: &[&str] = &[
 
 /// Extensions that produce false positives — metadata/declarations, not executable code
 const SKIP_EXTENSIONS: &[&str] = &[
-    ".map",   // source maps — stringified source, never executed
-    ".d.ts",  // TypeScript declarations — type definitions only
-    ".d.mts", // module declaration files
-    ".d.cts", // CommonJS declaration files
+    ".map",          // source maps — stringified source, never executed
+    ".d.ts",         // TypeScript declarations — type definitions only
+    ".d.mts",        // module declaration files
+    ".d.cts",        // CommonJS declaration files
+    ".tsbuildinfo",  // TypeScript build cache — hashes/metadata, never executable
 ];
 
 /// Directory names inside dep dirs that should be skipped entirely.
 /// NOTE: test/tests/spec are NOT skipped — malicious packages can hide payloads there.
 const SKIP_DIR_NAMES: &[&str] = &[
-    ".vite", // Vite prebundled cache — duplicates of node_modules packages
+    ".vite",       // Vite prebundled cache — duplicates of node_modules packages
+    ".svelte-kit", // SvelteKit generated output — duplicates of source files
 ];
 
 /// Non-code files inside dep dirs that should be skipped
@@ -340,12 +342,33 @@ impl Check for PatternsCheck {
                     false
                 };
 
+                // Pre-compute whether this file has any dangerous exec module
+                // for P001 gating — if a JS/TS file doesn't mention child_process etc.,
+                // regex.exec()/db.exec() are always benign, skip P001 entirely.
+                let has_dangerous_exec_module = DANGEROUS_EXEC_MODULES
+                    .iter()
+                    .any(|m| content.contains(m));
+
                 // Regex patterns — skip AST-handled rules for JS/TS files
                 for (line_num, line) in content.lines().enumerate() {
                     for (rule, re) in &compiled {
                         // If AST analyzed this file, skip P001 and P008 (AST handles them)
                         if ast_handled && is_ast_rule(rule.rule_id) {
                             continue;
+                        }
+
+                        // P001 (eval/exec): For JS/TS files without dangerous modules,
+                        // skip exec() matching — regex.exec(), db.exec() are benign.
+                        // eval() is NOT gated: it's always suspicious in any context.
+                        if rule.rule_id == "DEPSEC-P001"
+                            && is_js_or_ts(path)
+                            && !has_dangerous_exec_module
+                        {
+                            // Only skip if this particular match is exec(), not eval()
+                            let trimmed = line.trim();
+                            if !trimmed.contains("eval") {
+                                continue;
+                            }
                         }
 
                         if re.is_match(line) {
@@ -500,6 +523,20 @@ fn extract_package_name(rel_path: &str) -> Option<String> {
 fn is_ast_rule(rule_id: &str) -> bool {
     matches!(rule_id, "DEPSEC-P001" | "DEPSEC-P008" | "DEPSEC-P013")
 }
+
+/// Check if a file is JavaScript or TypeScript (for P001 gating)
+fn is_js_or_ts(path: &Path) -> bool {
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    matches!(
+        ext,
+        "js" | "mjs" | "cjs" | "ts" | "mts" | "cts" | "jsx" | "tsx"
+    )
+}
+
+/// Dangerous exec modules whose presence justifies P001 regex matching.
+/// Without these, exec() calls are benign (regex.exec, db.exec, cursor.exec).
+const DANGEROUS_EXEC_MODULES: &[&str] =
+    &["child_process", "shelljs", "execa", "cross-spawn"];
 
 fn is_binary_ext(path: &Path) -> bool {
     let ext = path
