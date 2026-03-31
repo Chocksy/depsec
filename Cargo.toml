@@ -1,6 +1,6 @@
 [package]
 name = "depsec"
-version = "0.13.1"
+version = "0.14.0"
 edition = "2021"
 description = "Supply chain security scanner for any GitHub project"
 license = "MIT"
