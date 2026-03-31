@@ -30,6 +30,53 @@ pub fn capitalize(s: &str) -> String {
     }
 }
 
+/// Detect the git remote origin URL and return a clean display string.
+/// e.g., `git@github.com:Chocksy/depsec.git` → `github.com/Chocksy/depsec`
+pub fn detect_repo_url(root: &std::path::Path) -> Option<String> {
+    let config_path = root.join(".git/config");
+    let content = std::fs::read_to_string(config_path).ok()?;
+
+    // Find [remote "origin"] section and extract url
+    let mut in_origin = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed == "[remote \"origin\"]" {
+            in_origin = true;
+            continue;
+        }
+        if trimmed.starts_with('[') {
+            in_origin = false;
+            continue;
+        }
+        if in_origin {
+            if let Some(url) = trimmed.strip_prefix("url = ") {
+                return Some(clean_git_url(url));
+            }
+        }
+    }
+    None
+}
+
+fn clean_git_url(url: &str) -> String {
+    let url = url.trim();
+
+    // SSH: git@github.com:user/repo.git → github.com/user/repo
+    if let Some(rest) = url.strip_prefix("git@") {
+        return rest
+            .replacen(':', "/", 1)
+            .trim_end_matches(".git")
+            .to_string();
+    }
+
+    // HTTPS: https://github.com/user/repo.git → github.com/user/repo
+    let url = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .unwrap_or(url);
+
+    url.trim_end_matches(".git").to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -62,5 +109,37 @@ mod tests {
         assert_eq!(capitalize("deps"), "Deps");
         assert_eq!(capitalize(""), "");
         assert_eq!(capitalize("a"), "A");
+    }
+
+    #[test]
+    fn test_clean_git_url_ssh() {
+        assert_eq!(
+            clean_git_url("git@github.com:Chocksy/depsec.git"),
+            "github.com/Chocksy/depsec"
+        );
+    }
+
+    #[test]
+    fn test_clean_git_url_https() {
+        assert_eq!(
+            clean_git_url("https://github.com/Chocksy/depsec.git"),
+            "github.com/Chocksy/depsec"
+        );
+    }
+
+    #[test]
+    fn test_clean_git_url_no_suffix() {
+        assert_eq!(
+            clean_git_url("https://github.com/user/repo"),
+            "github.com/user/repo"
+        );
+    }
+
+    #[test]
+    fn test_detect_repo_url_current_project() {
+        // Running from the depsec repo itself
+        let url = detect_repo_url(std::path::Path::new("."));
+        assert!(url.is_some());
+        assert!(url.unwrap().contains("depsec"));
     }
 }

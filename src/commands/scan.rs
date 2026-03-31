@@ -18,7 +18,11 @@ pub struct ScanOpts<'a> {
 pub fn run(root: &Path, opts: &ScanOpts) -> ExitCode {
     let config = config::load_config(root);
 
-    match scanner::run_scan(root, &config, opts.checks) {
+    let spinner = crate::spinner::Spinner::new("Scanning...");
+    let result = scanner::run_scan(root, &config, opts.checks);
+    spinner.stop();
+
+    match result {
         Ok(mut report) => {
             // Tag pattern findings with reachability
             let app_imports = reachability::scan_app_imports(root);

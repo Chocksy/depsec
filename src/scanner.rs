@@ -83,7 +83,7 @@ pub fn run_scan(
     }
 
     let project_name = detect_project_name(root);
-    Ok(ScanReport::new(project_name, results))
+    Ok(ScanReport::new(project_name, results).with_repo_url(root))
 }
 
 #[cfg(test)]

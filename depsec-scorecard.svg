@@ -1,46 +1,70 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="480" height="330" viewBox="0 0 480 330">
+<svg xmlns="http://www.w3.org/2000/svg" width="800" height="456" viewBox="0 0 800 456">
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#0f172a"/>
-      <stop offset="100%" stop-color="#1e293b"/>
+    <linearGradient id="barCyan" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#73daca"/>
+      <stop offset="100%" stop-color="#7dcfff"/>
+    </linearGradient>
+    <linearGradient id="barGreen" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#9ece6a"/>
+      <stop offset="100%" stop-color="#73daca"/>
     </linearGradient>
   </defs>
-  <rect width="480" height="330" rx="16" fill="url(#bg)"/>
-  <rect width="480" height="330" rx="16" fill="none" stroke="#334155" stroke-width="1"/>
-  <text x="20" y="35" font-size="14" fill="#94a3b8" font-family="system-ui, -apple-system, sans-serif" font-weight="400">DEPSEC SCORECARD</text>
-  <text x="20" y="80" font-size="48" fill="#22c55e" font-family="system-ui, -apple-system, sans-serif" font-weight="700">10.0</text>
-  <text x="115" y="65" font-size="16" fill="#64748b" font-family="system-ui, -apple-system, sans-serif">/10</text>
-  <text x="115" y="82" font-size="14" fill="#22c55e" font-family="system-ui, -apple-system, sans-serif" font-weight="600">Grade A</text>
-  <text x="260" y="55" font-size="13" fill="#94a3b8" font-family="system-ui, -apple-system, sans-serif">depsec</text>
-  <text x="260" y="75" font-size="11" fill="#64748b" font-family="system-ui, -apple-system, sans-serif">v0.2.0 &#183; Supply Chain Security</text>
-  <line x1="20" y1="100" x2="460" y2="100" stroke="#334155" stroke-width="1"/>
+  <rect width="800" height="456" rx="10" fill="#1a1b26"/>
+  <rect width="800" height="36" rx="10" fill="#16161e"/>
+  <rect x="0" y="26" width="800" height="10" fill="#16161e"/>
+  <circle cx="20" cy="18" r="6" fill="#ff5f57"/>
+  <circle cx="40" cy="18" r="6" fill="#febc2e"/>
+  <circle cx="60" cy="18" r="6" fill="#28c840"/>
+  <text x="400" y="22" font-size="12" fill="#565f89" font-family="SF Mono, Menlo, Consolas, monospace" text-anchor="middle">depsec scorecard</text>
+  <text x="32" y="68" font-size="10" fill="#565f89" font-family="SF Mono, Menlo, Consolas, monospace" letter-spacing="3">SUPPLY CHAIN SECURITY</text>
+  <text x="32" y="112" font-size="42" fill="#73daca" font-family="SF Mono, Menlo, Consolas, monospace" font-weight="700">A</text>
+  <text x="80" y="100" font-size="28" fill="#c0caf5" font-family="SF Mono, Menlo, Consolas, monospace" font-weight="700">10.0</text>
+  <text x="160" y="100" font-size="14" fill="#565f89" font-family="SF Mono, Menlo, Consolas, monospace">/10</text>
+  <text x="460" y="75" font-size="15" fill="#c0caf5" font-family="SF Mono, Menlo, Consolas, monospace" font-weight="600">github.com/Chocksy/depsec</text>
+  <text x="460" y="95" font-size="11" fill="#565f89" font-family="SF Mono, Menlo, Consolas, monospace">v0.10.0 &#183; Supply Chain Security Scanner</text>
+  <text x="460" y="115" font-size="10" fill="#414868" font-family="SF Mono, Menlo, Consolas, monospace">depsec.dev</text>
+  <line x1="32" y1="135" x2="768" y2="135" stroke="#24283b" stroke-width="1"/>
+  <rect x="32" y="160" width="736" height="28" rx="4" fill="#16161e"/>
+  <text x="40" y="178" font-size="10" fill="#565f89" font-family="SF Mono, Menlo, Consolas, monospace" letter-spacing="1">CHECK</text>
+  <text x="200" y="178" font-size="10" fill="#565f89" font-family="SF Mono, Menlo, Consolas, monospace" letter-spacing="1">PROGRESS</text>
+  <text x="560" y="178" font-size="10" fill="#565f89" font-family="SF Mono, Menlo, Consolas, monospace" letter-spacing="1">SCORE</text>
+  <text x="760" y="178" font-size="10" fill="#565f89" font-family="SF Mono, Menlo, Consolas, monospace" letter-spacing="1" text-anchor="end">STATUS</text>
 
-    <text x="20" y="136" font-size="13" fill="#e2e8f0" font-weight="500">Workflows</text>
-    <rect x="160" y="126" width="180" height="12" rx="6" fill="#1e293b"/>
-    <rect x="160" y="126" width="180" height="12" rx="6" fill="#22c55e"/>
-    <text x="350" y="136" font-size="12" fill="#cbd5e1" font-weight="600">100%</text>
-    <text x="440" y="136" font-size="11" fill="#4ade80" text-anchor="end">&#x2713; clean</text>
-    <text x="20" y="168" font-size="13" fill="#e2e8f0" font-weight="500">Deps</text>
-    <rect x="160" y="158" width="180" height="12" rx="6" fill="#1e293b"/>
-    <rect x="160" y="158" width="180" height="12" rx="6" fill="#22c55e"/>
-    <text x="350" y="168" font-size="12" fill="#cbd5e1" font-weight="600">100%</text>
-    <text x="440" y="168" font-size="11" fill="#4ade80" text-anchor="end">&#x2713; clean</text>
-    <text x="20" y="200" font-size="13" fill="#e2e8f0" font-weight="500">Patterns</text>
-    <rect x="160" y="190" width="180" height="12" rx="6" fill="#1e293b"/>
-    <rect x="160" y="190" width="180" height="12" rx="6" fill="#22c55e"/>
-    <text x="350" y="200" font-size="12" fill="#cbd5e1" font-weight="600">100%</text>
-    <text x="440" y="200" font-size="11" fill="#4ade80" text-anchor="end">&#x2713; clean</text>
-    <text x="20" y="232" font-size="13" fill="#e2e8f0" font-weight="500">Secrets</text>
-    <rect x="160" y="222" width="180" height="12" rx="6" fill="#1e293b"/>
-    <rect x="160" y="222" width="180" height="12" rx="6" fill="#22c55e"/>
-    <text x="350" y="232" font-size="12" fill="#cbd5e1" font-weight="600">100%</text>
-    <text x="440" y="232" font-size="11" fill="#4ade80" text-anchor="end">&#x2713; clean</text>
-    <text x="20" y="264" font-size="13" fill="#e2e8f0" font-weight="500">Hygiene</text>
-    <rect x="160" y="254" width="180" height="12" rx="6" fill="#1e293b"/>
-    <rect x="160" y="254" width="180" height="12" rx="6" fill="#22c55e"/>
-    <text x="350" y="264" font-size="12" fill="#cbd5e1" font-weight="600">100%</text>
-    <text x="440" y="264" font-size="11" fill="#4ade80" text-anchor="end">&#x2713; clean</text>
-  <line x1="20" y1="295" x2="460" y2="295" stroke="#334155" stroke-width="1"/>
-  <text x="20" y="312" font-size="10" fill="#475569" font-family="system-ui, -apple-system, sans-serif">github.com/chocksy/depsec</text>
-  <text x="460" y="312" font-size="10" fill="#475569" font-family="system-ui, -apple-system, sans-serif" text-anchor="end">Own your security</text>
+    <text x="32" y="206" font-size="13" fill="#c0caf5" font-family="SF Mono, Menlo, Consolas, monospace" font-weight="600">Workflows</text>
+    <text x="32" y="220" font-size="9" fill="#414868" font-family="SF Mono, Menlo, Consolas, monospace">Action pins, permissions, injection guards</text>
+    <rect x="200" y="198" width="340" height="8" rx="4" fill="#24283b"/>
+    <rect x="200" y="198" width="340" height="8" rx="4" fill="url(#barCyan)"/>
+    <text x="560" y="206" font-size="12" fill="#a9b1d6" font-family="SF Mono, Menlo, Consolas, monospace" font-weight="600">100%</text>
+    <text x="760" y="206" font-size="12" fill="#73daca" font-family="SF Mono, Menlo, Consolas, monospace" text-anchor="end">&#x2713; clean</text>
+    <line x1="32" y1="232" x2="768" y2="232" stroke="#24283b" stroke-width="1"/>
+    <text x="32" y="250" font-size="13" fill="#c0caf5" font-family="SF Mono, Menlo, Consolas, monospace" font-weight="600">Deps</text>
+    <text x="32" y="264" font-size="9" fill="#414868" font-family="SF Mono, Menlo, Consolas, monospace">OSV advisories, lockfile, known malware</text>
+    <rect x="200" y="242" width="340" height="8" rx="4" fill="#24283b"/>
+    <rect x="200" y="242" width="340" height="8" rx="4" fill="url(#barCyan)"/>
+    <text x="560" y="250" font-size="12" fill="#a9b1d6" font-family="SF Mono, Menlo, Consolas, monospace" font-weight="600">100%</text>
+    <text x="760" y="250" font-size="12" fill="#73daca" font-family="SF Mono, Menlo, Consolas, monospace" text-anchor="end">&#x2713; clean</text>
+    <line x1="32" y1="276" x2="768" y2="276" stroke="#24283b" stroke-width="1"/>
+    <text x="32" y="294" font-size="13" fill="#c0caf5" font-family="SF Mono, Menlo, Consolas, monospace" font-weight="600">Patterns</text>
+    <text x="32" y="308" font-size="9" fill="#414868" font-family="SF Mono, Menlo, Consolas, monospace">Malicious code patterns, obfuscation, exfil</text>
+    <rect x="200" y="286" width="340" height="8" rx="4" fill="#24283b"/>
+    <rect x="200" y="286" width="340" height="8" rx="4" fill="url(#barCyan)"/>
+    <text x="560" y="294" font-size="12" fill="#a9b1d6" font-family="SF Mono, Menlo, Consolas, monospace" font-weight="600">100%</text>
+    <text x="760" y="294" font-size="12" fill="#73daca" font-family="SF Mono, Menlo, Consolas, monospace" text-anchor="end">&#x2713; clean</text>
+    <line x1="32" y1="320" x2="768" y2="320" stroke="#24283b" stroke-width="1"/>
+    <text x="32" y="338" font-size="13" fill="#c0caf5" font-family="SF Mono, Menlo, Consolas, monospace" font-weight="600">Secrets</text>
+    <text x="32" y="352" font-size="9" fill="#414868" font-family="SF Mono, Menlo, Consolas, monospace">Hardcoded keys, tokens, credentials</text>
+    <rect x="200" y="330" width="340" height="8" rx="4" fill="#24283b"/>
+    <rect x="200" y="330" width="340" height="8" rx="4" fill="url(#barCyan)"/>
+    <text x="560" y="338" font-size="12" fill="#a9b1d6" font-family="SF Mono, Menlo, Consolas, monospace" font-weight="600">100%</text>
+    <text x="760" y="338" font-size="12" fill="#73daca" font-family="SF Mono, Menlo, Consolas, monospace" text-anchor="end">&#x2713; clean</text>
+    <line x1="32" y1="364" x2="768" y2="364" stroke="#24283b" stroke-width="1"/>
+    <text x="32" y="382" font-size="13" fill="#c0caf5" font-family="SF Mono, Menlo, Consolas, monospace" font-weight="600">Hygiene</text>
+    <text x="32" y="396" font-size="9" fill="#414868" font-family="SF Mono, Menlo, Consolas, monospace">SECURITY.md, .gitignore, branch protection</text>
+    <rect x="200" y="374" width="340" height="8" rx="4" fill="#24283b"/>
+    <rect x="200" y="374" width="340" height="8" rx="4" fill="url(#barCyan)"/>
+    <text x="560" y="382" font-size="12" fill="#a9b1d6" font-family="SF Mono, Menlo, Consolas, monospace" font-weight="600">100%</text>
+    <text x="760" y="382" font-size="12" fill="#73daca" font-family="SF Mono, Menlo, Consolas, monospace" text-anchor="end">&#x2713; clean</text>
+  <line x1="32" y1="424" x2="768" y2="424" stroke="#24283b" stroke-width="1"/>
+  <text x="32" y="442" font-size="10" fill="#414868" font-family="SF Mono, Menlo, Consolas, monospace">depsec.dev</text>
+  <text x="768" y="442" font-size="10" fill="#414868" font-family="SF Mono, Menlo, Consolas, monospace" text-anchor="end">Own your supply chain</text>
 </svg>

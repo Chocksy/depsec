@@ -26,6 +26,7 @@ mod scoring;
 mod secrets_ast;
 mod selfcheck;
 mod shellhook;
+mod spinner;
 mod triage;
 mod triage_cache;
 mod utils;

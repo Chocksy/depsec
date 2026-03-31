@@ -151,7 +151,7 @@ pub fn scorecard(root: &Path, output: &Path) -> ExitCode {
                 Ok(()) => {
                     println!("Scorecard saved to {}", output.display());
                     println!(
-                        "Add to README: <img src=\"{}\" width=\"480\">",
+                        "Add to README: <img src=\"{}\" width=\"800\">",
                         output.display()
                     );
                     ExitCode::SUCCESS

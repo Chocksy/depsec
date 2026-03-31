@@ -41,6 +41,8 @@ fn rule_label(rule_id: &str) -> String {
 pub struct ScanReport {
     pub version: String,
     pub project_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo_url: Option<String>,
     pub results: Vec<CheckResult>,
     pub total_score: f64,
     pub grade: Grade,
@@ -53,10 +55,16 @@ impl ScanReport {
         Self {
             version: env!("CARGO_PKG_VERSION").to_string(),
             project_name,
+            repo_url: None,
             results,
             total_score,
             grade,
         }
+    }
+
+    pub fn with_repo_url(mut self, root: &std::path::Path) -> Self {
+        self.repo_url = crate::utils::detect_repo_url(root);
+        self
     }
 }
 
@@ -278,6 +286,7 @@ pub fn render_human(
     let filtered_report = ScanReport {
         version: report.version.clone(),
         project_name: report.project_name.clone(),
+        repo_url: report.repo_url.clone(),
         results: filtered_results,
         total_score: filtered_score,
         grade: filtered_grade,
@@ -565,47 +574,80 @@ fn capitalize(s: &str) -> String {
     crate::utils::capitalize(s)
 }
 
+/// Count visible terminal columns, ignoring ANSI escape sequences.
+fn visual_len(s: &str) -> usize {
+    let mut len = 0;
+    let mut in_escape = false;
+    for c in s.chars() {
+        if c == '\x1b' {
+            in_escape = true;
+        } else if in_escape {
+            if c.is_ascii_alphabetic() {
+                in_escape = false;
+            }
+        } else {
+            len += 1;
+        }
+    }
+    len
+}
+
 fn render_ascii_scorecard(report: &ScanReport, use_color: bool) -> String {
     let bar_width = 20;
-    let box_width = 52;
-    let border = "─".repeat(box_width);
+    let inner_width = 46; // chars between the two │ borders
+    let border = "─".repeat(inner_width);
 
-    let (green, yellow, red, dim, bold, reset) = if use_color {
+    let (cyan, green, yellow, red, dim, bold, reset) = if use_color {
         (
-            "\x1b[32m", "\x1b[33m", "\x1b[31m", "\x1b[90m", "\x1b[1m", "\x1b[0m",
+            "\x1b[36m", "\x1b[32m", "\x1b[33m", "\x1b[31m", "\x1b[90m", "\x1b[1m", "\x1b[0m",
         )
     } else {
-        ("", "", "", "", "", "")
+        ("", "", "", "", "", "", "")
     };
 
     let grade_color = match report.grade {
-        Grade::A | Grade::B => green,
+        Grade::A | Grade::B => cyan,
         Grade::C | Grade::D => yellow,
         Grade::F => red,
     };
 
+    let bar_color_for = |pct: u32| -> &str {
+        if pct >= 90 {
+            cyan
+        } else if pct >= 60 {
+            yellow
+        } else {
+            red
+        }
+    };
+
+    // Helper: wrap inner content in a box row, right-padding to inner_width
+    let box_row = |content: &str| -> String {
+        let vis = visual_len(content);
+        let pad = inner_width.saturating_sub(vis);
+        format!("{dim}│{reset}{content}{}{dim}│{reset}\n", " ".repeat(pad))
+    };
+
     let mut out = String::new();
 
-    // Top border
+    // ── Top border ──
     out.push_str(&format!("{dim}┌{border}┐{reset}\n"));
 
-    // Title + score
+    // ── Title row: " DEPSEC SCORECARD          7.8/10 B " ──
     let score_str = format!("{:.1}/10", report.total_score / 10.0);
+    let grade_str = format!("{}", report.grade);
     let title = "DEPSEC SCORECARD";
-    let padding = box_width - title.len() - score_str.len() - 6;
-    out.push_str(&format!(
-        "{dim}│{reset} {bold}{title}{reset}{: <pad$}{grade_color}{bold}{score}{reset} {grade_color}{grade}{reset} {dim}│{reset}\n",
-        "",
-        pad = padding,
-        title = title,
-        score = score_str,
-        grade = report.grade,
-    ));
+    let left = format!(" {bold}{title}{reset}");
+    let right = format!("{grade_color}{bold}{score_str}{reset} {grade_color}{grade_str}{reset} ");
+    let left_vis = 1 + title.len(); // space + title
+    let right_vis = score_str.len() + 1 + grade_str.len() + 1; // score + space + grade + space
+    let gap = inner_width.saturating_sub(left_vis + right_vis);
+    out.push_str(&box_row(&format!("{left}{}{right}", " ".repeat(gap))));
 
-    // Separator
+    // ── Separator ──
     out.push_str(&format!("{dim}├{border}┤{reset}\n"));
 
-    // Category rows
+    // ── Category rows ──
     for result in &report.results {
         let pct = if result.max_score > 0.0 {
             (result.score / result.max_score * 100.0).round() as u32
@@ -615,34 +657,35 @@ fn render_ascii_scorecard(report: &ScanReport, use_color: bool) -> String {
 
         let filled = (pct as usize * bar_width) / 100;
         let empty = bar_width - filled;
-        let bar_color = if pct >= 90 {
-            green
-        } else if pct >= 60 {
-            yellow
-        } else {
-            red
-        };
+        let bc = bar_color_for(pct);
 
         let bar = format!(
-            "{bar_color}{}{dim}{}{reset}",
+            "{bc}{}{dim}{}{reset}",
             "█".repeat(filled),
             "░".repeat(empty),
         );
 
         let name = capitalize(&result.category);
+        let name_pad = 12usize.saturating_sub(name.len());
+
         let status = if result.findings.is_empty() {
             format!("{green}✓{reset}")
         } else {
             format!("{red}{}{reset}", result.findings.len())
         };
 
-        out.push_str(&format!(
-            "{dim}│{reset} {name:<12} {bar} {pct:>3}% {status:>3} {dim}│{reset}\n",
-        ));
+        // Build row content with known visual widths
+        let content = format!(" {name}{} {bar} {pct:>3}% {status} ", " ".repeat(name_pad),);
+        out.push_str(&box_row(&content));
     }
 
-    // Bottom border
+    // ── Bottom border ──
     out.push_str(&format!("{dim}└{border}┘{reset}\n"));
+
+    // ── Grading scale ──
+    out.push_str(&format!(
+        "\n{dim}Grading scale:{reset}  {cyan}A{reset} 90-100  {cyan}B{reset} 75-89  {yellow}C{reset} 60-74  {yellow}D{reset} 40-59  {red}F{reset} 0-39\n",
+    ));
 
     out
 }
@@ -786,5 +829,80 @@ mod tests {
         assert!(finding_visible(&high, Persona::Regular));
         assert!(!finding_visible(&low, Persona::Regular));
         assert!(finding_visible(&low, Persona::Auditor));
+    }
+
+    #[test]
+    fn test_scorecard_alignment_no_color() {
+        let results = vec![
+            CheckResult::new("patterns", vec![], 25.0, vec![]),
+            CheckResult::new("workflows", vec![], 25.0, vec![]),
+            CheckResult::new("secrets", vec![], 25.0, vec![]),
+        ];
+        let report = ScanReport::new("test".into(), results);
+        let scorecard = render_ascii_scorecard(&report, false);
+
+        // Every line inside the box must start with │ and end with │,
+        // and all lines must be the same visual width.
+        let box_lines: Vec<&str> = scorecard
+            .lines()
+            .filter(|l| {
+                l.starts_with('┌') || l.starts_with('│') || l.starts_with('├') || l.starts_with('└')
+            })
+            .collect();
+
+        assert!(box_lines.len() >= 5, "Expected at least 5 box lines");
+
+        let widths: Vec<usize> = box_lines.iter().map(|l| l.chars().count()).collect();
+        let first = widths[0];
+        for (i, w) in widths.iter().enumerate() {
+            assert_eq!(
+                *w, first,
+                "Line {i} width {w} != expected {first}: {:?}",
+                box_lines[i]
+            );
+        }
+    }
+
+    #[test]
+    fn test_scorecard_alignment_with_color() {
+        let findings =
+            vec![Finding::new("DEPSEC-P001", Severity::High, "test")
+                .with_confidence(Confidence::High)];
+        let results = vec![
+            CheckResult::new("patterns", findings, 25.0, vec![]),
+            CheckResult::new("workflows", vec![], 25.0, vec![]),
+            CheckResult::new("capabilities", vec![], 25.0, vec![]),
+        ];
+        let report = ScanReport::new("test".into(), results);
+        let scorecard = render_ascii_scorecard(&report, true);
+
+        // Strip ANSI codes and verify all box lines have the same visual width
+        let box_lines: Vec<&str> = scorecard
+            .lines()
+            .filter(|l| {
+                let stripped: String = l.chars().filter(|c| !c.is_ascii_control()).collect();
+                stripped.contains('┌')
+                    || stripped.contains('│')
+                    || stripped.contains('├')
+                    || stripped.contains('└')
+            })
+            .collect();
+
+        let vis_widths: Vec<usize> = box_lines.iter().map(|l| visual_len(l)).collect();
+        let first = vis_widths[0];
+        for (i, w) in vis_widths.iter().enumerate() {
+            assert_eq!(
+                *w, first,
+                "Colored line {i} visual width {w} != expected {first}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_visual_len_strips_ansi() {
+        assert_eq!(visual_len("hello"), 5);
+        assert_eq!(visual_len("\x1b[32mhello\x1b[0m"), 5);
+        assert_eq!(visual_len("\x1b[1m\x1b[36mAB\x1b[0m"), 2);
+        assert_eq!(visual_len(""), 0);
     }
 }
