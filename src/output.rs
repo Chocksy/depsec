@@ -117,10 +117,6 @@ pub fn render_human(
     let filtered_score = compute_total_score(&filtered_results);
     let filtered_grade = compute_grade(filtered_score);
 
-    out.push_str(&format!(
-        "depsec v{} — Supply Chain Security Scanner\n\n",
-        report.version
-    ));
     out.push_str(&format!("Project: {}\n", report.project_name));
     out.push_str(&format!(
         "Grade: {} ({:.1}/10)\n",

@@ -20,17 +20,23 @@ impl Spinner {
             return Self { stop, handle: None };
         }
 
+        // Print first frame synchronously so it appears instantly
+        let cyan = "\x1b[36m";
+        let dim = "\x1b[90m";
+        let reset = "\x1b[0m";
+        eprint!("\r  {cyan}{}{reset} {message} {dim}(0s){reset}   ", FRAMES[0]);
+        let _ = std::io::stderr().flush();
+
         let stop_clone = stop.clone();
         let message = message.to_string();
 
         let handle = thread::spawn(move || {
             let start = Instant::now();
-            let mut i = 0usize;
-            let cyan = "\x1b[36m";
-            let dim = "\x1b[90m";
-            let reset = "\x1b[0m";
+            let mut i = 1usize; // start at 1 since frame 0 was already printed
 
             while !stop_clone.load(Ordering::Relaxed) {
+                thread::sleep(Duration::from_millis(80));
+
                 let elapsed = start.elapsed().as_secs();
                 let frame = FRAMES[i % FRAMES.len()];
 
@@ -46,7 +52,6 @@ impl Spinner {
                 let _ = std::io::stderr().flush();
 
                 i += 1;
-                thread::sleep(Duration::from_millis(80));
             }
 
             // Clear the spinner line
