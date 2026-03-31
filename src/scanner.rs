@@ -43,6 +43,15 @@ pub fn run_scan(
     config: &Config,
     check_filter: Option<&[String]>,
 ) -> anyhow::Result<ScanReport> {
+    run_scan_with_spinner(root, config, check_filter, None)
+}
+
+pub fn run_scan_with_spinner(
+    root: &Path,
+    config: &Config,
+    check_filter: Option<&[String]>,
+    spinner: Option<&crate::spinner::Spinner>,
+) -> anyhow::Result<ScanReport> {
     let ctx = ScanContext { root, config };
 
     let all_checks: Vec<Box<dyn Check>> = vec![
@@ -73,6 +82,10 @@ pub fn run_scan(
             continue;
         }
 
+        if let Some(sp) = spinner {
+            sp.set_status(name);
+        }
+
         match check.run(&ctx) {
             Ok(result) => results.push(result),
             Err(e) => {
@@ -83,6 +96,9 @@ pub fn run_scan(
     }
 
     // Apply external rules (loaded from .depsec/rules/ and ~/.config/depsec/rules/)
+    if let Some(sp) = spinner {
+        sp.set_status("external rules");
+    }
     let external_rules = crate::rules::load_external_rules(root);
     if !external_rules.is_empty() {
         let ext_findings = crate::rules::apply_rules(&external_rules, root);

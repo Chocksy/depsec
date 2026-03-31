@@ -1,6 +1,6 @@
 use std::io::{IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -9,15 +9,21 @@ const FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"
 pub struct Spinner {
     stop: Arc<AtomicBool>,
     handle: Option<thread::JoinHandle<()>>,
+    status: Arc<Mutex<String>>,
 }
 
 impl Spinner {
     /// Start a braille spinner on stderr. Only creates the thread if stderr is a terminal.
     pub fn new(message: &str) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
+        let status = Arc::new(Mutex::new(String::new()));
 
         if !std::io::stderr().is_terminal() {
-            return Self { stop, handle: None };
+            return Self {
+                stop,
+                handle: None,
+                status,
+            };
         }
 
         // Print first frame synchronously so it appears instantly
@@ -31,6 +37,7 @@ impl Spinner {
         let _ = std::io::stderr().flush();
 
         let stop_clone = stop.clone();
+        let status_clone = status.clone();
         let message = message.to_string();
 
         let handle = thread::spawn(move || {
@@ -51,7 +58,14 @@ impl Spinner {
                     format!("({elapsed}s)")
                 };
 
-                eprint!("\r  {cyan}{frame}{reset} {message} {dim}{time_str}{reset}   ");
+                let detail = status_clone.lock().map(|s| s.clone()).unwrap_or_default();
+                let display = if detail.is_empty() {
+                    format!("{message} {dim}{time_str}{reset}")
+                } else {
+                    format!("{message} {dim}{detail} {time_str}{reset}")
+                };
+
+                eprint!("\r  {cyan}{frame}{reset} {display}   ");
                 let _ = std::io::stderr().flush();
 
                 i += 1;
@@ -65,6 +79,14 @@ impl Spinner {
         Self {
             stop,
             handle: Some(handle),
+            status,
+        }
+    }
+
+    /// Update the spinner's status detail (shown after the main message)
+    pub fn set_status(&self, detail: &str) {
+        if let Ok(mut s) = self.status.lock() {
+            *s = detail.to_string();
         }
     }
 

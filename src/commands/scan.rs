@@ -31,7 +31,7 @@ pub fn run(root: &Path, opts: &ScanOpts) -> ExitCode {
     }
 
     let spinner = crate::spinner::Spinner::new("Scanning...");
-    let result = scanner::run_scan(root, &config, opts.checks);
+    let result = scanner::run_scan_with_spinner(root, &config, opts.checks, Some(&spinner));
     spinner.stop();
 
     match result {
