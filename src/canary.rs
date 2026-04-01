@@ -12,64 +12,123 @@ pub fn generate_canary_tokens(target_home: &Path) -> Result<Vec<CanaryToken>> {
     // Randomize which subset of canaries we place (attacker can't predict)
     let seed = random_seed();
 
+    // Helper: write file and record content hash for tamper detection
+    let mut place = |path: PathBuf, kind: &str, content: &str| -> Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&path, content)?;
+        let content_hash = hash_content(content.as_bytes());
+        tokens.push(CanaryToken {
+            path,
+            kind: kind.into(),
+            content_hash,
+        });
+        Ok(())
+    };
+
     // Always place SSH key — most commonly targeted
     let ssh_dir = target_home.join(".ssh");
     std::fs::create_dir_all(&ssh_dir)?;
     let ssh_key = generate_fake_ssh_key(&seed);
-    std::fs::write(ssh_dir.join("id_rsa"), &ssh_key)?;
     std::fs::write(ssh_dir.join("id_rsa.pub"), generate_fake_ssh_pubkey(&seed))?;
-    tokens.push(CanaryToken {
-        path: ssh_dir.join("id_rsa"),
-        kind: "SSH Private Key".into(),
-    });
+    place(ssh_dir.join("id_rsa"), "SSH Private Key", &ssh_key)?;
 
     // AWS credentials
-    let aws_dir = target_home.join(".aws");
-    std::fs::create_dir_all(&aws_dir)?;
     let aws_creds = generate_fake_aws_credentials(&seed);
-    std::fs::write(aws_dir.join("credentials"), &aws_creds)?;
-    tokens.push(CanaryToken {
-        path: aws_dir.join("credentials"),
-        kind: "AWS Credentials".into(),
-    });
+    place(
+        target_home.join(".aws/credentials"),
+        "AWS Credentials",
+        &aws_creds,
+    )?;
 
     // .env file with random API keys
     let env_content = generate_fake_env(&seed);
-    std::fs::write(target_home.join(".env"), &env_content)?;
-    tokens.push(CanaryToken {
-        path: target_home.join(".env"),
-        kind: "Environment File".into(),
-    });
+    place(target_home.join(".env"), "Environment File", &env_content)?;
 
     // .npmrc with fake token (conditionally — randomize)
     if !seed.is_multiple_of(3) {
         let npmrc = generate_fake_npmrc(&seed);
-        std::fs::write(target_home.join(".npmrc"), &npmrc)?;
-        tokens.push(CanaryToken {
-            path: target_home.join(".npmrc"),
-            kind: "npm Token".into(),
-        });
+        place(target_home.join(".npmrc"), "npm Token", &npmrc)?;
     }
 
     // GitHub CLI token (conditionally)
     if seed.is_multiple_of(2) {
-        let gh_dir = target_home.join(".config/gh");
-        std::fs::create_dir_all(&gh_dir)?;
         let gh_hosts = generate_fake_gh_hosts(&seed);
-        std::fs::write(gh_dir.join("hosts.yml"), &gh_hosts)?;
-        tokens.push(CanaryToken {
-            path: gh_dir.join("hosts.yml"),
-            kind: "GitHub CLI Token".into(),
-        });
+        place(
+            target_home.join(".config/gh/hosts.yml"),
+            "GitHub CLI Token",
+            &gh_hosts,
+        )?;
     }
 
     Ok(tokens)
+}
+
+/// Generate a realistic-looking home directory with canary credential files
+/// AND realistic dotfiles that make the sandbox look like a real developer machine.
+pub fn generate_honeypot_home(target_home: &Path) -> Result<Vec<CanaryToken>> {
+    // First, generate the canary credential tokens
+    let tokens = generate_canary_tokens(target_home)?;
+
+    // Then add realistic dotfiles that aren't canaries but make the home look real
+    generate_realistic_dotfiles(target_home)?;
+
+    Ok(tokens)
+}
+
+/// Create non-canary dotfiles that make a fake HOME look lived-in
+fn generate_realistic_dotfiles(home: &Path) -> Result<()> {
+    std::fs::write(
+        home.join(".bashrc"),
+        "# ~/.bashrc\nexport EDITOR=vim\nexport PATH=\"$HOME/.local/bin:$PATH\"\n\
+         alias ll='ls -la'\nalias gs='git status'\n",
+    )?;
+
+    std::fs::write(
+        home.join(".profile"),
+        "# ~/.profile\n[ -f ~/.bashrc ] && . ~/.bashrc\n",
+    )?;
+
+    let seed = random_seed();
+    let name = match seed % 5 {
+        0 => "Alex Chen",
+        1 => "Jordan Smith",
+        2 => "Sam Rodriguez",
+        3 => "Taylor Kim",
+        _ => "Morgan Lee",
+    };
+    std::fs::write(
+        home.join(".gitconfig"),
+        format!(
+            "[user]\n\tname = {name}\n\temail = {}@company.com\n[core]\n\teditor = vim\n[pull]\n\trebase = true\n",
+            name.split(' ').next().unwrap_or("dev").to_lowercase(),
+        ),
+    )?;
+
+    std::fs::write(
+        home.join(".node_repl_history"),
+        "console.log('hello')\nprocess.env\nrequire('fs').readdirSync('.')\n",
+    )?;
+
+    let npm_dir = home.join(".npm");
+    std::fs::create_dir_all(&npm_dir)?;
+    std::fs::write(
+        npm_dir.join(".npmrc"),
+        "registry=https://registry.npmjs.org/\n",
+    )?;
+
+    std::fs::create_dir_all(home.join(".config"))?;
+
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
 pub struct CanaryToken {
     pub path: PathBuf,
     pub kind: String,
+    /// SHA-256 hash of the original content — used for tamper detection
+    pub content_hash: String,
 }
 
 /// Clean up canary tokens after sandbox run
@@ -128,6 +187,32 @@ fn generate_fake_gh_hosts(seed: &u64) -> String {
     format!(
         "github.com:\n    oauth_token: ghp_{token}\n    user: developer\n    git_protocol: https\n"
     )
+}
+
+/// SHA-256 hash of file content — used for reliable tamper detection
+/// (timestamp-based detection is unreliable on macOS APFS)
+fn hash_content(data: &[u8]) -> String {
+    let hash = Sha256::digest(data);
+    format!("{:x}", hash)
+}
+
+/// Check if a canary token was tampered with by comparing content hashes.
+/// Returns the access type: "deleted", "tampered", or None if untouched.
+pub fn check_canary_tamper(token: &CanaryToken) -> Option<String> {
+    if !token.path.exists() {
+        return Some("deleted".into());
+    }
+    match std::fs::read(&token.path) {
+        Ok(content) => {
+            let current_hash = hash_content(&content);
+            if current_hash != token.content_hash {
+                Some("tampered".into())
+            } else {
+                None
+            }
+        }
+        Err(_) => Some("unreadable".into()),
+    }
 }
 
 // ── Pseudo-random utilities (deterministic from seed for reproducibility) ──
@@ -267,6 +352,72 @@ mod tests {
         let key = key_line.split('=').nth(1).unwrap().trim();
         assert_eq!(key.len(), 20); // AKIA + 16 chars
         assert!(key.starts_with("AKIA"));
+    }
+
+    #[test]
+    fn test_generate_honeypot_home() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let tokens = generate_honeypot_home(dir.path()).unwrap();
+
+        // Should have canary tokens
+        assert!(tokens.len() >= 3);
+
+        // Should also have realistic dotfiles
+        assert!(dir.path().join(".bashrc").exists());
+        assert!(dir.path().join(".gitconfig").exists());
+        assert!(dir.path().join(".profile").exists());
+        assert!(dir.path().join(".node_repl_history").exists());
+
+        // .gitconfig should look realistic
+        let gitconfig = std::fs::read_to_string(dir.path().join(".gitconfig")).unwrap();
+        assert!(gitconfig.contains("[user]"));
+        assert!(gitconfig.contains("@company.com"));
+    }
+
+    #[test]
+    fn test_canary_tamper_detection_untouched() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let tokens = generate_canary_tokens(dir.path()).unwrap();
+
+        for token in &tokens {
+            assert!(
+                check_canary_tamper(token).is_none(),
+                "Untouched canary {} should not be flagged as tampered",
+                token.kind
+            );
+        }
+    }
+
+    #[test]
+    fn test_canary_tamper_detection_modified() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let tokens = generate_canary_tokens(dir.path()).unwrap();
+
+        std::fs::write(&tokens[0].path, "STOLEN BY ATTACKER").unwrap();
+
+        assert_eq!(
+            check_canary_tamper(&tokens[0]),
+            Some("tampered".into()),
+            "Modified canary should be detected"
+        );
+        assert!(
+            check_canary_tamper(&tokens[1]).is_none(),
+            "Untouched canary should not be flagged"
+        );
+    }
+
+    #[test]
+    fn test_canary_tamper_detection_deleted() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let tokens = generate_canary_tokens(dir.path()).unwrap();
+
+        std::fs::remove_file(&tokens[0].path).unwrap();
+
+        assert_eq!(
+            check_canary_tamper(&tokens[0]),
+            Some("deleted".into()),
+            "Deleted canary should be detected"
+        );
     }
 
     #[test]

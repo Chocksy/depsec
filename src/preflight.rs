@@ -336,7 +336,21 @@ pub struct PreflightResult {
     pub packages_checked: usize,
 }
 
+/// Run preflight silently — returns findings without printing anything.
+/// Used by install_guard which handles its own output.
+pub fn run_preflight_quiet(root: &Path) -> anyhow::Result<PreflightResult> {
+    run_preflight_inner(root, false, true)
+}
+
 pub fn run_preflight(root: &Path, json_output: bool) -> anyhow::Result<PreflightResult> {
+    run_preflight_inner(root, json_output, false)
+}
+
+fn run_preflight_inner(
+    root: &Path,
+    json_output: bool,
+    quiet: bool,
+) -> anyhow::Result<PreflightResult> {
     let mut findings = Vec::new();
 
     // 1. Check package.json install scripts
@@ -370,14 +384,16 @@ pub fn run_preflight(root: &Path, json_output: bool) -> anyhow::Result<Preflight
         packages_checked: package_count,
     };
 
-    if json_output {
-        let output = serde_json::json!({
-            "packages_checked": package_count,
-            "findings": findings,
-        });
-        println!("{}", serde_json::to_string_pretty(&output)?);
-    } else {
-        print_preflight_result(&result);
+    if !quiet {
+        if json_output {
+            let output = serde_json::json!({
+                "packages_checked": package_count,
+                "findings": findings,
+            });
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        } else {
+            print_preflight_result(&result);
+        }
     }
 
     Ok(result)
@@ -433,20 +449,22 @@ fn check_typosquatting(pkg: &parsers::Package, findings: &mut Vec<Finding>) {
     for &top_pkg in popular {
         let distance = levenshtein(&pkg.name, top_pkg);
 
-        // Scale max allowed distance by name length:
-        // Short names (1-3 chars): only exact distance 1 (typos, not unrelated words)
-        // Medium names (4-5 chars): distance ≤ 2
-        // Long names (6+): distance ≤ 2
-        let min_len = pkg.name.len().min(top_pkg.len());
-        let max_distance = if min_len <= 3 { 1 } else { 2 };
-
-        if distance > 0 && distance <= max_distance {
+        // Only flag distance 1 — real typosquats (swap/add/remove one char).
+        // Distance 2 produces too many false positives (sha1/sha2, slab/clap, etc.)
+        if distance == 1 {
             findings.push(
-                Finding::new("DEPSEC-T001", Severity::High, format!(
-                    "Possible typosquat: '{}' is similar to popular package '{top_pkg}' (distance: {distance})",
+                Finding::new(
+                    "DEPSEC-T001",
+                    Severity::Medium,
+                    format!(
+                        "Name similarity: '{}' is 1 edit from popular package '{top_pkg}'",
+                        pkg.name
+                    ),
+                )
+                .with_suggestion(format!(
+                    "Verify you intended to install '{}' and not '{top_pkg}'",
                     pkg.name
-                ))
-                    .with_suggestion(format!("Verify you intended to install '{}' and not '{top_pkg}'", pkg.name)),
+                )),
             );
             break; // One match per package is enough
         }
@@ -718,13 +736,25 @@ mod tests {
     fn test_typosquatting_detection() {
         let mut findings = Vec::new();
         let pkg = parsers::Package {
-            name: "loadsh".into(), // typosquat of "lodash"
+            name: "lodasg".into(), // 1 edit from "lodash" (h→g)
             version: "1.0.0".into(),
             ecosystem: parsers::Ecosystem::Npm,
         };
         check_typosquatting(&pkg, &mut findings);
         assert!(!findings.is_empty());
         assert_eq!(findings[0].rule_id, "DEPSEC-T001");
+    }
+
+    #[test]
+    fn test_typosquatting_distance_2_not_flagged() {
+        let mut findings = Vec::new();
+        let pkg = parsers::Package {
+            name: "loadsh".into(), // 2 edits from "lodash" — too far, not flagged
+            version: "1.0.0".into(),
+            ecosystem: parsers::Ecosystem::Npm,
+        };
+        check_typosquatting(&pkg, &mut findings);
+        assert!(findings.is_empty(), "Distance 2 should not be flagged");
     }
 
     #[test]

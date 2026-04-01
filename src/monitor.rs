@@ -31,6 +31,169 @@ pub struct MonitorResult {
     pub write_violations: Vec<crate::watchdog::WriteViolation>,
 }
 
+/// Observations collected by MonitorHandle during concurrent monitoring
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MonitorObservations {
+    pub connections: Vec<Connection>,
+    pub expected: Vec<Connection>,
+    pub unexpected: Vec<Connection>,
+    pub critical: Vec<Connection>,
+    pub file_alerts: Vec<crate::watchdog::FileAlert>,
+    pub write_violations: Vec<crate::watchdog::WriteViolation>,
+    pub duration_secs: f64,
+}
+
+impl MonitorObservations {
+    /// Create empty observations (no monitoring performed, e.g. Docker)
+    pub fn empty() -> Self {
+        Self {
+            connections: vec![],
+            expected: vec![],
+            unexpected: vec![],
+            critical: vec![],
+            file_alerts: vec![],
+            write_violations: vec![],
+            duration_secs: 0.0,
+        }
+    }
+}
+
+/// Handle for monitoring an externally-managed process.
+/// Start monitoring with `MonitorHandle::start(pid)`, then call `stop()` to collect results.
+pub struct MonitorHandle {
+    running: Arc<std::sync::atomic::AtomicBool>,
+    poll_handle: Option<std::thread::JoinHandle<()>>,
+    watchdog_handle: Option<std::thread::JoinHandle<()>>,
+    connections: Arc<Mutex<Vec<Connection>>>,
+    file_alerts: Arc<Mutex<Vec<crate::watchdog::FileAlert>>>,
+    write_violations: Arc<Mutex<Vec<crate::watchdog::WriteViolation>>>,
+    start: std::time::Instant,
+}
+
+impl MonitorHandle {
+    /// Start monitoring a process by PID
+    pub fn start(pid: u32) -> Self {
+        let connections: Arc<Mutex<Vec<Connection>>> = Arc::new(Mutex::new(Vec::new()));
+        let seen_addrs: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
+        let running = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let file_alerts: Arc<Mutex<Vec<crate::watchdog::FileAlert>>> =
+            Arc::new(Mutex::new(Vec::new()));
+        let write_violations: Arc<Mutex<Vec<crate::watchdog::WriteViolation>>> =
+            Arc::new(Mutex::new(Vec::new()));
+
+        let conn_clone = connections.clone();
+        let seen_clone = seen_addrs.clone();
+        let running_clone = running.clone();
+
+        let poll_handle = std::thread::spawn(move || {
+            poll_connections(pid, &conn_clone, &seen_clone, &running_clone);
+        });
+
+        let project_root = std::env::current_dir().unwrap_or_default();
+        let config = crate::config::load_config(&project_root);
+        let sensitive_paths = crate::watchdog::build_sensitive_paths(&config.install.watch_paths);
+        let allowed_write_dirs: Vec<std::path::PathBuf> = vec![
+            project_root.join("node_modules"),
+            project_root.join("vendor"),
+            project_root.join(".venv"),
+            std::env::temp_dir(),
+            PathBuf::from("/tmp"),
+            PathBuf::from("/private/tmp"),
+        ];
+
+        let alerts_clone = file_alerts.clone();
+        let violations_clone = write_violations.clone();
+        let running_watchdog = running.clone();
+
+        let watchdog_handle = std::thread::spawn(move || {
+            let mut seen_alerts = std::collections::HashSet::new();
+            let mut seen_violations = std::collections::HashSet::new();
+            while running_watchdog.load(std::sync::atomic::Ordering::Relaxed) {
+                let new_alerts =
+                    crate::watchdog::check_process_files(pid, &sensitive_paths, &mut seen_alerts);
+                if !new_alerts.is_empty() {
+                    alerts_clone.lock().unwrap().extend(new_alerts);
+                }
+                let new_violations = crate::watchdog::check_write_boundaries(
+                    pid,
+                    &allowed_write_dirs,
+                    &mut seen_violations,
+                );
+                if !new_violations.is_empty() {
+                    violations_clone.lock().unwrap().extend(new_violations);
+                }
+                std::thread::sleep(Duration::from_millis(POLL_INTERVAL_MS));
+            }
+        });
+
+        Self {
+            running,
+            poll_handle: Some(poll_handle),
+            watchdog_handle: Some(watchdog_handle),
+            connections,
+            file_alerts,
+            write_violations,
+            start: std::time::Instant::now(),
+        }
+    }
+
+    /// Stop monitoring and collect results
+    pub fn stop(mut self) -> MonitorObservations {
+        self.running
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        if let Some(h) = self.poll_handle.take() {
+            let _ = h.join();
+        }
+        if let Some(h) = self.watchdog_handle.take() {
+            let _ = h.join();
+        }
+
+        let defaults = default_expected_hosts();
+
+        // Load learned baseline (same as run_monitor does)
+        let project_root = std::env::current_dir().unwrap_or_default();
+        let baseline_path = project_root.join(".depsec/monitor-baseline.json");
+        let user_baseline = std::fs::read_to_string(&baseline_path)
+            .ok()
+            .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok());
+        let user_allowed: HashSet<String> = user_baseline
+            .as_ref()
+            .and_then(|b| b.get("allowed_hosts"))
+            .and_then(|h| h.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let all_connections = self.connections.lock().unwrap().clone();
+        let mut expected = Vec::new();
+        let mut unexpected = Vec::new();
+        let mut critical = Vec::new();
+
+        for conn in &all_connections {
+            if ALWAYS_BLOCK.iter().any(|b| conn.remote_host == *b) {
+                critical.push(conn.clone());
+            } else if is_expected_connection(conn, &defaults, &user_allowed) {
+                expected.push(conn.clone());
+            } else {
+                unexpected.push(conn.clone());
+            }
+        }
+
+        MonitorObservations {
+            connections: all_connections,
+            expected,
+            unexpected,
+            critical,
+            file_alerts: self.file_alerts.lock().unwrap().clone(),
+            write_violations: self.write_violations.lock().unwrap().clone(),
+            duration_secs: self.start.elapsed().as_secs_f64(),
+        }
+    }
+}
+
 /// Known-malicious IPs that are always flagged
 const ALWAYS_BLOCK: &[&str] = &["169.254.169.254", "169.254.170.2"];
 
@@ -593,5 +756,16 @@ mod tests {
         let allowed = HashSet::new();
         let conn = make_conn("registry.npmjs.org", "/usr/local/bin/npm");
         assert!(is_expected_connection(&conn, &defaults, &allowed));
+    }
+
+    #[test]
+    fn test_monitor_observations_empty() {
+        let obs = MonitorObservations::empty();
+        assert!(obs.connections.is_empty());
+        assert!(obs.unexpected.is_empty());
+        assert!(obs.critical.is_empty());
+        assert!(obs.file_alerts.is_empty());
+        assert!(obs.write_violations.is_empty());
+        assert_eq!(obs.duration_secs, 0.0);
     }
 }

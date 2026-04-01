@@ -31,7 +31,7 @@
 
 Currently canary tokens generate only credential files (.ssh/id_rsa, .aws/credentials, .env, .npmrc, .config/gh/hosts.yml). A fake HOME with ONLY credential files is suspicious. Add realistic dotfiles that make it look like a real developer's home.
 
-- [ ] **Step 1: Add `generate_realistic_home` function**
+- [x] **Step 1: Add `generate_realistic_home` function**
 
 After the existing `generate_canary_tokens` function, add a new function that creates the full fake HOME:
 
@@ -99,7 +99,7 @@ fn generate_realistic_dotfiles(home: &Path) -> Result<()> {
 }
 ```
 
-- [ ] **Step 2: Add test for honeypot home**
+- [x] **Step 2: Add test for honeypot home**
 
 ```rust
 #[test]
@@ -123,12 +123,12 @@ fn test_generate_honeypot_home() {
 }
 ```
 
-- [ ] **Step 3: Run tests**
+- [x] **Step 3: Run tests**
 
 Run: `cargo test canary -- --nocapture`
 Expected: All canary tests pass including the new one
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/canary.rs
@@ -147,7 +147,7 @@ git commit -m "feat: generate realistic honeypot HOME with dotfiles + canary cre
 
 Change all three sandbox backends to mount the canary HOME as `$HOME` instead of mounting empty tmpfs at individual sensitive paths. Pass the `canary_home` path as a parameter.
 
-- [ ] **Step 1: Update run_sandboxed signature**
+- [x] **Step 1: Update run_sandboxed signature**
 
 ```rust
 /// Run a command in a sandbox with a fake HOME directory
@@ -166,7 +166,7 @@ pub fn run_sandboxed(
 }
 ```
 
-- [ ] **Step 2: Update bubblewrap to mount fake HOME**
+- [x] **Step 2: Update bubblewrap to mount fake HOME**
 
 Replace the current tmpfs-per-sensitive-path approach with mounting the canary home:
 
@@ -219,7 +219,7 @@ fn run_bubblewrap(args: &[String], project_dir: &Path, canary_home: &Path) -> Re
 }
 ```
 
-- [ ] **Step 3: Update sandbox-exec to use fake HOME**
+- [x] **Step 3: Update sandbox-exec to use fake HOME**
 
 ```rust
 fn run_sandbox_exec(args: &[String], project_dir: &Path, canary_home: &Path) -> Result<SandboxResult> {
@@ -263,7 +263,7 @@ fn run_sandbox_exec(args: &[String], project_dir: &Path, canary_home: &Path) -> 
 }
 ```
 
-- [ ] **Step 4: Update Docker to mount fake HOME**
+- [x] **Step 4: Update Docker to mount fake HOME**
 
 ```rust
 fn run_docker(args: &[String], project_dir: &Path, canary_home: &Path) -> Result<SandboxResult> {
@@ -295,7 +295,7 @@ fn run_docker(args: &[String], project_dir: &Path, canary_home: &Path) -> Result
 }
 ```
 
-- [ ] **Step 5: Update the call site in install_guard.rs**
+- [x] **Step 5: Update the call site in install_guard.rs**
 
 Update the `sandbox::run_sandboxed` call to pass `canary_dir`:
 
@@ -303,7 +303,7 @@ Update the `sandbox::run_sandboxed` call to pass `canary_dir`:
 match sandbox::run_sandboxed(args, root, &sandbox_type, &canary_dir) {
 ```
 
-- [ ] **Step 6: Update tests**
+- [x] **Step 6: Update tests**
 
 Update `test_run_sandboxed_none_errors` to pass a dummy canary path:
 
@@ -322,12 +322,12 @@ fn test_run_sandboxed_none_errors() {
 }
 ```
 
-- [ ] **Step 7: Run tests**
+- [x] **Step 7: Run tests**
 
 Run: `cargo test sandbox -- --nocapture`
 Expected: All tests pass
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/sandbox.rs src/install_guard.rs
@@ -344,7 +344,7 @@ git commit -m "feat: mount honeypot HOME in all sandbox backends"
 
 Currently the install command runs TWICE: once in the sandbox (Phase 1.5), then again with monitoring (Phase 2). Merge these into a single run where the sandbox wraps the command and the monitor observes concurrently.
 
-- [ ] **Step 1: Extract monitor polling into a standalone function**
+- [x] **Step 1: Extract monitor polling into a standalone function**
 
 In `src/monitor.rs`, create a new public function that starts monitoring threads for a given PID without spawning a new process:
 
@@ -467,7 +467,7 @@ pub struct MonitorObservations {
 }
 ```
 
-- [ ] **Step 2: Merge sandbox + monitor in install_guard.rs**
+- [x] **Step 2: Merge sandbox + monitor in install_guard.rs**
 
 Replace the current two-phase approach (Phase 1.5 sandbox + Phase 2 monitor) with a single run where sandbox wraps the command and monitor observes:
 
@@ -502,7 +502,7 @@ if use_sandbox {
 // Remove the old Phase 2: Run the command with monitoring block entirely
 ```
 
-- [ ] **Step 3: Add test for single-run behavior**
+- [x] **Step 3: Add test for single-run behavior**
 
 ```rust
 #[test]
@@ -513,12 +513,12 @@ fn test_install_guard_single_run() {
 }
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `cargo test install_guard -- --nocapture && cargo test monitor -- --nocapture`
 Expected: All tests pass
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/install_guard.rs src/monitor.rs
@@ -535,7 +535,7 @@ git commit -m "feat: merge sandbox + monitor into single run (eliminate double i
 
 The kill chain: canary tamper detected + unexpected network connection = definitive exfiltration. Implement the verdict logic.
 
-- [ ] **Step 1: Add kill chain evaluation to evidence.rs**
+- [x] **Step 1: Add kill chain evaluation to evidence.rs**
 
 ```rust
 /// Evaluate the kill chain: correlate canary access with network observations
@@ -582,7 +582,7 @@ pub enum KillChainVerdict {
 }
 ```
 
-- [ ] **Step 2: Wire kill chain into install_guard**
+- [x] **Step 2: Wire kill chain into install_guard**
 
 After collecting canary access and monitor observations:
 
@@ -612,7 +612,7 @@ match &verdict {
 }
 ```
 
-- [ ] **Step 3: Add tests for kill chain verdict**
+- [x] **Step 3: Add tests for kill chain verdict**
 
 ```rust
 #[cfg(test)]
@@ -651,11 +651,11 @@ mod tests {
 }
 ```
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `cargo test evidence -- --nocapture && cargo test install_guard -- --nocapture`
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/evidence.rs src/install_guard.rs
@@ -671,7 +671,7 @@ git commit -m "feat: kill chain verdict — canary + unexpected network = exfilt
 
 The current `discover_packages_with_hooks` only scans top-level `node_modules/`. Council finding: transitive deps at any depth can have install hooks.
 
-- [ ] **Step 1: Make discover_packages_with_hooks recursive**
+- [x] **Step 1: Make discover_packages_with_hooks recursive**
 
 ```rust
 fn discover_packages_with_hooks(root: &Path) -> Vec<String> {
@@ -713,7 +713,7 @@ fn discover_packages_with_hooks(root: &Path) -> Vec<String> {
 }
 ```
 
-- [ ] **Step 2: Add test**
+- [x] **Step 2: Add test**
 
 ```rust
 #[test]
@@ -743,11 +743,11 @@ fn test_discover_hooks_recursive() {
 }
 ```
 
-- [ ] **Step 3: Run tests**
+- [x] **Step 3: Run tests**
 
 Run: `cargo test install_guard -- --nocapture`
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/install_guard.rs
@@ -763,7 +763,7 @@ git commit -m "feat: recursive install hook discovery across all node_modules de
 
 Council finding: 6 lines for a clean install is the opposite of "invisible seatbelt". On success, output should be minimal.
 
-- [ ] **Step 1: Add quiet mode for clean installs**
+- [x] **Step 1: Add quiet mode for clean installs**
 
 Wrap all the informational output in a condition. Only show details on warnings or blocks:
 
@@ -776,12 +776,12 @@ if !has_issues && !json_output {
 
 Suppress the preflight, sandbox, and monitor status lines when everything passes. Keep them only when there are findings.
 
-- [ ] **Step 2: Test the output manually**
+- [x] **Step 2: Test the output manually**
 
 Run: `cargo build --release && ./target/release/depsec protect npm install --prefix ../pos`
 Expected: Single line `✓ depsec: install clean` (or similar minimal output)
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add src/install_guard.rs
@@ -792,7 +792,7 @@ git commit -m "feat: silent clean-install output — one line on success, verbos
 
 ### Task 7: Integration testing + final quality
 
-- [ ] **Step 1: Test on POS app**
+- [x] **Step 1: Test on POS app**
 
 Run: `./target/release/depsec protect npm install --prefix ../pos`
 Expected: Clean install with minimal output, no false credential theft warnings
@@ -802,12 +802,12 @@ Expected: Clean install with minimal output, no false credential theft warnings
 Run: `./target/release/depsec protect cargo build --manifest-path ../hubstaff-cli/Cargo.toml`
 Expected: Clean pass
 
-- [ ] **Step 3: cargo fmt + clippy + tests**
+- [x] **Step 3: cargo fmt + clippy + tests**
 
 Run: `cargo fmt && cargo clippy -- -D warnings && cargo test`
 Expected: All pass
 
-- [ ] **Step 4: Final commit**
+- [x] **Step 4: Final commit**
 
 ```bash
 git add -A

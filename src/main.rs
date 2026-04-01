@@ -8,6 +8,7 @@ mod canary;
 mod checks;
 mod commands;
 mod config;
+mod evidence;
 mod fixer;
 mod install_guard;
 mod llm;
