@@ -53,11 +53,13 @@ depsec fix . --dry-run  # preview changes
 
 Currently auto-fixes workflow pinning (W001). Other findings require manual remediation — follow the suggestions in scan output.
 
-### 4. Setup (Optional)
+### 4. Setup
 
 ```bash
-depsec setup --hook              # install pre-commit hook (blocks secrets from being committed)
-depsec setup --shell             # print shell aliases to auto-protect package installs
+depsec setup                     # interactive wizard — checkboxes for shell hooks, pre-commit, sandbox
+depsec setup --all               # install all defaults non-interactively (for CI/LLMs)
+depsec setup --hook              # install pre-commit hook only
+depsec setup --shell             # print shell aliases (for eval in shell profile)
 depsec setup --baseline          # initialize network connection baseline
 depsec setup --self-check        # verify depsec binary integrity
 ```

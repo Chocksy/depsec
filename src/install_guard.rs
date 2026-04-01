@@ -14,7 +14,7 @@ pub fn run_install_guard(
     json_output: bool,
     learn: bool,
     strict: bool,
-    sandbox_cli: bool,
+    sandbox_enabled: bool,
 ) -> Result<InstallGuardResult> {
     if args.is_empty() {
         anyhow::bail!("No command specified. Usage: depsec protect <command> [args...]");
@@ -66,9 +66,9 @@ pub fn run_install_guard(
         }
     }
 
-    // Phase 1.5: Sandbox execution (when enabled via CLI flag or config)
-    let use_sandbox = sandbox_cli || config.mode == "sandbox" || config.sandbox != "none";
-    let sandbox_pref = if sandbox_cli && config.sandbox == "none" {
+    // Phase 1.5: Sandbox execution (pre-resolved by caller via config::resolve_sandbox)
+    let use_sandbox = sandbox_enabled;
+    let sandbox_pref = if config.sandbox == "none" {
         "auto"
     } else {
         &config.sandbox

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
@@ -160,6 +160,116 @@ impl Default for InstallConfig {
         }
     }
 }
+
+// ── Global Config (~/.depsec/config.toml) ─────────────────────
+
+/// Global configuration stored at ~/.depsec/config.toml
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct GlobalConfig {
+    pub setup: GlobalSetupConfig,
+    pub protect: GlobalProtectConfig,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct GlobalSetupConfig {
+    /// Whether shell hooks were installed
+    pub shell_hook: bool,
+    /// "project" or "global"
+    pub hook_scope: String,
+    /// Path to the shell RC file that was modified
+    pub shell_profile: String,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
+pub struct GlobalProtectConfig {
+    /// true = auto-detect sandbox, false = off
+    pub sandbox: bool,
+}
+
+/// Returns the path to the global config directory (~/.depsec/)
+pub fn global_config_dir() -> PathBuf {
+    dirs_path().join(".depsec")
+}
+
+/// Returns the path to the global config file (~/.depsec/config.toml)
+pub fn global_config_path() -> PathBuf {
+    global_config_dir().join("config.toml")
+}
+
+fn dirs_path() -> PathBuf {
+    std::env::var("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("/tmp"))
+}
+
+/// Load global config from ~/.depsec/config.toml (returns default if missing)
+pub fn load_global_config() -> GlobalConfig {
+    let path = global_config_path();
+    if path.exists() {
+        match std::fs::read_to_string(&path) {
+            Ok(content) => match toml::from_str::<GlobalConfig>(&content) {
+                Ok(config) => return config,
+                Err(e) => {
+                    eprintln!("Warning: failed to parse ~/.depsec/config.toml: {e}");
+                }
+            },
+            Err(e) => {
+                eprintln!("Warning: failed to read ~/.depsec/config.toml: {e}");
+            }
+        }
+    }
+    GlobalConfig::default()
+}
+
+/// Save global config to ~/.depsec/config.toml with 0600 permissions
+pub fn save_global_config(config: &GlobalConfig) -> anyhow::Result<()> {
+    let dir = global_config_dir();
+    std::fs::create_dir_all(&dir)?;
+
+    let content = toml::to_string_pretty(config)?;
+    let path = global_config_path();
+    std::fs::write(&path, content)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    }
+
+    Ok(())
+}
+
+/// Resolve whether sandbox should be used.
+/// Priority: CLI flag > project depsec.toml > global ~/.depsec/config.toml > off
+pub fn resolve_sandbox(cli_flag: Option<bool>, project: &Config, global: &GlobalConfig) -> bool {
+    // CLI flag takes absolute precedence
+    if let Some(flag) = cli_flag {
+        return flag;
+    }
+
+    // Project config: if sandbox is explicitly set to something other than "none"
+    if project.install.sandbox != "none" {
+        return true;
+    }
+
+    // Project config: if mode is explicitly "sandbox"
+    if project.install.mode == "sandbox" {
+        return true;
+    }
+
+    // Global config
+    if global.protect.sandbox {
+        return true;
+    }
+
+    // Default: off (backward compat)
+    false
+}
+
+// ── Project Config (depsec.toml) ──────────────────────────────
 
 pub fn load_config(root: &Path) -> Config {
     let config_path = root.join("depsec.toml");
@@ -320,6 +430,79 @@ cache_ttl_days = 7
         assert_eq!(config.triage.api_key_env, "MY_KEY");
         assert_eq!(config.triage.model, "gpt-4o");
         assert_eq!(config.triage.max_findings, 10);
+    }
+
+    #[test]
+    fn test_global_config_round_trip() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let config_dir = dir.path().join(".depsec");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        let config_path = config_dir.join("config.toml");
+
+        let config = GlobalConfig {
+            setup: GlobalSetupConfig {
+                shell_hook: true,
+                hook_scope: "global".into(),
+                shell_profile: "/home/user/.zshrc".into(),
+            },
+            protect: GlobalProtectConfig { sandbox: true },
+        };
+
+        let content = toml::to_string_pretty(&config).unwrap();
+        std::fs::write(&config_path, &content).unwrap();
+
+        let parsed: GlobalConfig = toml::from_str(&content).unwrap();
+        assert!(parsed.setup.shell_hook);
+        assert_eq!(parsed.setup.hook_scope, "global");
+        assert_eq!(parsed.setup.shell_profile, "/home/user/.zshrc");
+        assert!(parsed.protect.sandbox);
+    }
+
+    #[test]
+    fn test_global_config_defaults() {
+        let config = GlobalConfig::default();
+        assert!(!config.setup.shell_hook);
+        assert_eq!(config.setup.hook_scope, "");
+        assert!(!config.protect.sandbox);
+    }
+
+    #[test]
+    fn test_resolve_sandbox_cli_flag_wins() {
+        let project = Config::default();
+        let global = GlobalConfig {
+            protect: GlobalProtectConfig { sandbox: true },
+            ..Default::default()
+        };
+        // CLI --no-sandbox overrides global config
+        assert!(!resolve_sandbox(Some(false), &project, &global));
+        // CLI --sandbox overrides default off
+        let global_off = GlobalConfig::default();
+        assert!(resolve_sandbox(Some(true), &project, &global_off));
+    }
+
+    #[test]
+    fn test_resolve_sandbox_project_config() {
+        let mut project = Config::default();
+        project.install.sandbox = "auto".into();
+        let global = GlobalConfig::default();
+        assert!(resolve_sandbox(None, &project, &global));
+    }
+
+    #[test]
+    fn test_resolve_sandbox_global_config() {
+        let project = Config::default(); // sandbox = "none"
+        let global = GlobalConfig {
+            protect: GlobalProtectConfig { sandbox: true },
+            ..Default::default()
+        };
+        assert!(resolve_sandbox(None, &project, &global));
+    }
+
+    #[test]
+    fn test_resolve_sandbox_default_off() {
+        let project = Config::default();
+        let global = GlobalConfig::default();
+        assert!(!resolve_sandbox(None, &project, &global));
     }
 
     #[test]

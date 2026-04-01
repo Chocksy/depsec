@@ -102,9 +102,12 @@ enum Commands {
         /// Output as JSON
         #[arg(long)]
         json: bool,
-        /// Run in sandbox (bubblewrap/sandbox-exec/docker)
+        /// Force sandbox ON (override config)
         #[arg(long)]
         sandbox: bool,
+        /// Force sandbox OFF (override config)
+        #[arg(long)]
+        no_sandbox: bool,
         /// Record connections as baseline
         #[arg(long)]
         learn: bool,
@@ -154,6 +157,12 @@ enum Commands {
         /// Verify depsec's own integrity
         #[arg(long)]
         self_check: bool,
+        /// Install all default protections (non-interactive)
+        #[arg(long)]
+        all: bool,
+        /// Run non-interactively (for LLMs/CI)
+        #[arg(long)]
+        non_interactive: bool,
         /// Path to the project root
         #[arg(default_value = ".")]
         path: PathBuf,
@@ -392,20 +401,30 @@ fn main() -> ExitCode {
         Commands::Protect {
             json,
             sandbox,
+            no_sandbox,
             learn,
             strict,
             preflight_only,
             command,
-        } => commands::protect::run(
-            &command,
-            &commands::protect::ProtectOpts {
-                json,
-                sandbox,
-                learn,
-                strict,
-                preflight_only,
-            },
-        ),
+        } => {
+            let sandbox_opt = if sandbox {
+                Some(true)
+            } else if no_sandbox {
+                Some(false)
+            } else {
+                None
+            };
+            commands::protect::run(
+                &command,
+                &commands::protect::ProtectOpts {
+                    json,
+                    sandbox: sandbox_opt,
+                    learn,
+                    strict,
+                    preflight_only,
+                },
+            )
+        }
 
         Commands::Fix { path, dry_run } => {
             let root = match canonicalize_or_exit(&path) {
@@ -429,6 +448,8 @@ fn main() -> ExitCode {
             baseline,
             shell,
             self_check,
+            all,
+            non_interactive,
             path,
         } => {
             let root = path.canonicalize().unwrap_or(path);
@@ -438,6 +459,8 @@ fn main() -> ExitCode {
                 baseline,
                 shell,
                 self_check,
+                all,
+                non_interactive,
                 path: &root,
             })
         }

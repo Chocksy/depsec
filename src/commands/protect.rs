@@ -4,7 +4,7 @@ use crate::{config, install_guard, preflight};
 
 pub struct ProtectOpts {
     pub json: bool,
-    pub sandbox: bool,
+    pub sandbox: Option<bool>,
     pub learn: bool,
     pub strict: bool,
     pub preflight_only: bool,
@@ -12,7 +12,8 @@ pub struct ProtectOpts {
 
 pub fn run(command: &[String], opts: &ProtectOpts) -> ExitCode {
     let root = std::env::current_dir().unwrap_or_else(|_| ".".into());
-    let config = config::load_config(&root);
+    let project_config = config::load_config(&root);
+    let global_config = config::load_global_config();
 
     // Preflight-only mode: just run typosquat/metadata checks
     if opts.preflight_only {
@@ -37,15 +38,18 @@ pub fn run(command: &[String], opts: &ProtectOpts) -> ExitCode {
         };
     }
 
+    // Resolve sandbox: CLI flag > project config > global config > off
+    let use_sandbox = config::resolve_sandbox(opts.sandbox, &project_config, &global_config);
+
     // Full protect mode: preflight + sandbox + monitor + watchdog
     match install_guard::run_install_guard(
         command,
         &root,
-        &config.install,
+        &project_config.install,
         opts.json,
         opts.learn,
         opts.strict,
-        opts.sandbox,
+        use_sandbox,
     ) {
         Ok(result) => {
             if opts.json {

@@ -56,6 +56,25 @@ Use `depsec setup --hook` to install pre-commit secret detection.
 
 **Any AgentSkills-compatible tool** — `SKILL.md` in the repo root follows the [AgentSkills](https://agentskills.io) spec.
 
+## Get Protected (2 minutes)
+
+```sh
+# Step 1: Install
+curl -fsSL https://depsec.dev/install | sh
+
+# Step 2: Run the setup wizard
+depsec setup
+```
+
+The wizard lets you choose what to enable:
+- **Shell protection** — wraps npm/yarn/pip/cargo with monitoring (default: on)
+- **Pre-commit hook** — blocks secrets from being committed (default: on)
+- **Sandbox by default** — sandboxes all protected installs (default: on)
+
+For CI/LLMs (non-interactive): `depsec setup --all`
+
+After setup, every `npm install`, `pip install`, `cargo add` etc. is automatically monitored. Sandboxed installs block credential theft.
+
 ## Quick Start
 
 ```sh
@@ -214,13 +233,16 @@ depsec protect --learn npm install         # Record expected connections
 depsec protect --strict npm test           # Fail on unexpected connections
 ```
 
-### Setup & Utilities
+### Setup
 
 ```sh
-depsec setup --hook         # Install pre-commit hook
+depsec setup                # Interactive wizard (checkboxes for what to enable)
+depsec setup --all          # Install all defaults non-interactively (CI/LLM)
+depsec setup --hook         # Install pre-commit hook only
 depsec setup --baseline     # Generate network baseline
-depsec setup --shell        # Print shell aliases for package managers
+depsec setup --shell        # Print shell aliases (for eval in shell RC)
 depsec setup --self-check   # Verify depsec binary integrity
+depsec setup --unhook       # Remove pre-commit hook
 depsec ci .                 # CI mode (SARIF output + exit codes)
 depsec scorecard .          # Generate SVG scorecard image
 depsec badge .              # Output badge markdown
