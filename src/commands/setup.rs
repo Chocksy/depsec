@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::process::ExitCode;
 
-use crate::{baseline, config, sandbox, selfcheck, shellhook};
+use crate::{baseline, config, sandbox, selfcheck, shellhook, tui};
 
 pub struct SetupOpts<'a> {
     pub hook: bool,
@@ -56,43 +56,50 @@ pub fn run(opts: &SetupOpts) -> ExitCode {
 /// Run the interactive checkbox wizard
 fn run_wizard(opts: &SetupOpts) -> ExitCode {
     let global = config::load_global_config();
+    let first_run = !global_config_exists();
 
-    println!("depsec v{} — Setup\n", env!("CARGO_PKG_VERSION"));
+    eprintln!("depsec v{} — Setup\n", env!("CARGO_PKG_VERSION"));
 
     // Build options with pre-selection based on existing config
-    let items = vec![
-        "Shell protection    Wraps npm/yarn/pip/cargo with monitoring",
-        "Pre-commit hook     Blocks secrets from being committed",
-        "Sandbox by default  Sandboxes all protected installs",
-        "Network baseline    Initialize connection baseline for this project",
-        "Self-check          Verify depsec binary integrity",
+    let mut options = vec![
+        tui::MultiSelectOption {
+            label: "Shell protection".into(),
+            description: "Wraps npm/yarn/pip/cargo with monitoring".into(),
+            selected: first_run || global.setup.shell_hook,
+        },
+        tui::MultiSelectOption {
+            label: "Pre-commit hook".into(),
+            description: "Blocks secrets from being committed".into(),
+            selected: first_run || !global.setup.hook_scope.is_empty(),
+        },
+        tui::MultiSelectOption {
+            label: "Sandbox by default".into(),
+            description: "Sandboxes all protected installs".into(),
+            selected: first_run || global.protect.sandbox,
+        },
+        tui::MultiSelectOption {
+            label: "Network baseline".into(),
+            description: "Initialize connection baseline for this project".into(),
+            selected: false,
+        },
+        tui::MultiSelectOption {
+            label: "Self-check".into(),
+            description: "Verify depsec binary integrity".into(),
+            selected: false,
+        },
     ];
 
-    let defaults = vec![
-        global.setup.shell_hook || !global_config_exists(), // default ON for first run
-        !global.setup.hook_scope.is_empty() || !global_config_exists(),
-        global.protect.sandbox || !global_config_exists(),
-        false,
-        false,
-    ];
-
-    let selections = match dialoguer::MultiSelect::new()
-        .with_prompt("Select protections to install")
-        .items(&items)
-        .defaults(&defaults)
-        .interact_opt()
-    {
-        Ok(Some(s)) => s,
-        Ok(None) | Err(_) => {
-            println!("Setup cancelled, no changes made.");
+    let selections = match tui::multi_select("Select protections to install", &mut options) {
+        Some(s) if !s.is_empty() => s,
+        Some(_) => {
+            eprintln!("Nothing selected.");
+            return ExitCode::SUCCESS;
+        }
+        None => {
+            eprintln!("Setup cancelled, no changes made.");
             return ExitCode::SUCCESS;
         }
     };
-
-    if selections.is_empty() {
-        println!("Nothing selected.");
-        return ExitCode::SUCCESS;
-    }
 
     let want_shell = selections.contains(&0);
     let want_hook = selections.contains(&1);
@@ -102,23 +109,23 @@ fn run_wizard(opts: &SetupOpts) -> ExitCode {
 
     // Hook scope sub-prompt
     let hook_scope = if want_hook {
-        let scope_items = vec![
-            "This project only   .git/hooks/pre-commit",
-            "Global (all repos)  git config --global core.hooksPath",
+        let scope_options = vec![
+            tui::SelectOption {
+                label: "This project only".into(),
+                description: ".git/hooks/pre-commit".into(),
+            },
+            tui::SelectOption {
+                label: "Global (all repos)".into(),
+                description: "git config --global core.hooksPath".into(),
+            },
         ];
-        match dialoguer::Select::new()
-            .with_prompt("Pre-commit hook scope")
-            .items(&scope_items)
-            .default(0)
-            .interact_opt()
-        {
-            Ok(Some(0)) => HookScope::Project,
-            Ok(Some(1)) => HookScope::Global,
-            Ok(None) | Err(_) => {
-                println!("Setup cancelled, no changes made.");
+        match tui::single_select("Pre-commit hook scope", &scope_options, 0) {
+            Some(0) => HookScope::Project,
+            Some(1) => HookScope::Global,
+            _ => {
+                eprintln!("Setup cancelled, no changes made.");
                 return ExitCode::SUCCESS;
             }
-            _ => HookScope::Project,
         }
     } else {
         HookScope::Project
@@ -128,9 +135,9 @@ fn run_wizard(opts: &SetupOpts) -> ExitCode {
     if want_sandbox {
         let sandbox_type = sandbox::detect_sandbox("auto");
         if sandbox_type != sandbox::SandboxType::None {
-            println!("\n\x1b[32m✓\x1b[0m Sandbox available: {sandbox_type}");
+            eprintln!("\n\x1b[32m✓\x1b[0m Sandbox available: {sandbox_type}");
         } else {
-            println!("\n\x1b[33m⚠\x1b[0m No sandbox backend available (bubblewrap, sandbox-exec, or Docker)");
+            eprintln!("\n\x1b[33m⚠\x1b[0m No sandbox backend available (bubblewrap, sandbox-exec, or Docker)");
         }
     }
 

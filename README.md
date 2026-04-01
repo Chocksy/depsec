@@ -397,7 +397,7 @@ Global preferences are stored at `~/.depsec/config.toml` (created by `depsec set
 3. **AST over regex** — tree-sitter eliminates false positives
 4. **No plugins** — closed attack surface
 5. **No secrets required** — pure read-only analysis (tokens optional)
-6. **15 direct dependencies** — minimal supply chain surface
+6. **17 direct dependencies** — minimal supply chain surface
 
 ## License
 

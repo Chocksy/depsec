@@ -29,6 +29,7 @@ mod shellhook;
 mod spinner;
 mod triage;
 mod triage_cache;
+mod tui;
 mod utils;
 mod watchdog;
 
