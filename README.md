@@ -8,17 +8,7 @@ Detects vulnerable dependencies, malicious code patterns, hardcoded secrets, wor
 [![DepSec Score](https://img.shields.io/badge/depsec-A-brightgreen)](https://github.com/chocksy/depsec)
 [![crates.io](https://img.shields.io/crates/v/depsec)](https://crates.io/crates/depsec)
 
-<img src="depsec-scorecard.svg?v=0.15.0" width="100%">
-
-## Benchmark
-
-Tested against **10,582 real malware packages** from the [Datadog malicious-software-packages-dataset](https://github.com/DataDog/malicious-software-packages-dataset):
-
-| Dataset | Packages | Detected | Rate |
-|---------|----------|----------|------|
-| npm malware | 8,806 | 8,806 | 100% |
-| PyPI malware | 1,776 | 1,776 | 100% |
-| **Total** | **10,582** | **10,582** | **100%** |
+<img src="depsec-scorecard.svg?v=0.16.0" width="100%">
 
 ## Install
 
@@ -32,48 +22,21 @@ Or with Cargo:
 cargo install depsec
 ```
 
-## AI Agent Integration
-
-depsec works with AI coding tools out of the box. Add it to your agent's context and it will scan, fix, and protect your project automatically.
-
-**Claude Code** — add to your project's `.claude/commands/`:
-
-```sh
-# Copy the skill into your project
-mkdir -p .claude/commands && cp SKILL.md .claude/commands/depsec.md
-```
-
-Or paste this into your project's `CLAUDE.md`:
-
-```markdown
-## Security Scanning
-Run `depsec scan .` before committing. Run `depsec fix .` to auto-pin GitHub Actions.
-Run `depsec protect npm install <pkg>` when installing unfamiliar packages.
-Use `depsec setup --hook` to install pre-commit secret detection.
-```
-
-**Codex / Cursor / Windsurf** — these tools read `AGENTS.md` automatically from the repo root. It's already included.
-
-**Any AgentSkills-compatible tool** — `SKILL.md` in the repo root follows the [AgentSkills](https://agentskills.io) spec.
-
 ## Get Protected (2 minutes)
 
 ```sh
-# Step 1: Install
-curl -fsSL https://depsec.dev/install | sh
-
-# Step 2: Run the setup wizard
+# Run the setup wizard — checkboxes for what to enable
 depsec setup
 ```
 
-The wizard lets you choose what to enable:
-- **Shell protection** — wraps npm/yarn/pip/cargo with monitoring (default: on)
-- **Pre-commit hook** — blocks secrets from being committed (default: on)
-- **Sandbox by default** — sandboxes all protected installs (default: on)
+The wizard configures:
+- **Shell protection** — wraps npm/yarn/pip/cargo with automatic monitoring
+- **Pre-commit hook** — blocks secrets from being committed
+- **Sandbox by default** — sandboxes all protected installs
 
-For CI/LLMs (non-interactive): `depsec setup --all`
+For CI or LLMs (non-interactive): `depsec setup --all`
 
-After setup, every `npm install`, `pip install`, `cargo add` etc. is automatically monitored. Sandboxed installs block credential theft.
+After setup, every `npm install`, `pip install`, `cargo add` etc. is automatically monitored and sandboxed. No extra flags needed.
 
 ## Quick Start
 
@@ -82,46 +45,77 @@ depsec scan .
 ```
 
 ```
-depsec v0.10.0 — Supply Chain Security Scanner
+depsec v0.16.0 — Supply Chain Security Scanner
 
 Project: my-app
 Grade: B (7.8/10)
 
 [Patterns]
-  ── ACTION REQUIRED (2 runtime packages) ──────
+  -- ACTION REQUIRED (2 runtime packages) ------
   evil-pkg (2 findings)
-    ✗ P001: Shell Execution — exec() with variable input
+    x P001: Shell Execution — exec() with variable input
       node_modules/evil-pkg/index.js:42
-      → Verify commands are static or properly escaped
-    ✗ P004: Credential Harvesting — reads ~/.ssh
+    x P004: Credential Harvesting — reads ~/.ssh
       node_modules/evil-pkg/lib/steal.js:8
-      → Remove immediately — no legitimate package reads your SSH keys
 
-  ── BUILD TOOLS (safe, 12 findings collapsed) ──
+  -- BUILD TOOLS (safe, 12 findings collapsed) --
   webpack, esbuild, vite — 12 findings in build-only tools
 
-[Dependencies]
-  ✓ 0 known vulnerabilities (142 packages checked via OSV)
-
-[Secrets]
-  ✓ No hardcoded secrets found (scanned 234 files)
-
-[Workflows]
-  ✓ All GitHub Actions pinned to SHA
-  ✓ Workflow permissions minimized
-
-[Hygiene]
-  ✓ SECURITY.md exists
-  ✓ .gitignore covers sensitive patterns
-
-──────────────────────────
-Rule Guide — what these rules mean:
-
-P001: Shell Execution
-  Calls child_process.exec/spawn with variable arguments.
-  If user-controlled, enables Remote Code Execution.
-  Common in build tools where it's expected.
+[Dependencies]  0 known vulnerabilities (142 packages checked via OSV)
+[Secrets]       No hardcoded secrets found (scanned 234 files)
+[Workflows]     All GitHub Actions pinned to SHA
+[Hygiene]       SECURITY.md exists, .gitignore covers sensitive patterns
 ```
+
+## How It Works
+
+```
+scan ──→ score ──→ protect ──→ fix
+  │         │         │          │
+  │     grade A-F     │     auto-pin
+  │                   │     GitHub Actions
+  patterns        preflight
+  deps            sandbox
+  secrets         network monitor
+  workflows       file watchdog
+  hygiene         canary tokens
+  capabilities
+```
+
+**Scan** runs 6 check modules across your project. AST-aware analysis (tree-sitter) eliminates false positives. Reachability analysis separates runtime from build-only findings.
+
+**Protect** wraps package installs with a 4-phase pipeline: preflight typosquatting checks, OS-level sandbox (bubblewrap/sandbox-exec/Docker), network monitoring, and file watchdog with canary tokens.
+
+**Fix** auto-pins GitHub Actions to commit SHAs. Other findings include actionable remediation guidance.
+
+## AI Agent Integration
+
+depsec works with AI coding tools out of the box.
+
+**Claude Code** — paste into your project's `CLAUDE.md`:
+
+```markdown
+## Security
+Run `depsec scan .` before committing. Run `depsec fix .` to auto-pin Actions.
+Run `depsec protect npm install <pkg>` for unfamiliar packages.
+Run `depsec setup --all` to enable shell hooks, pre-commit, and sandbox.
+```
+
+Or copy the skill: `mkdir -p .claude/commands && cp SKILL.md .claude/commands/depsec.md`
+
+**Codex / Cursor / Windsurf** — reads `AGENTS.md` from repo root automatically.
+
+**OpenClaw / Gemini / Amp** — `SKILL.md` follows the [AgentSkills](https://agentskills.io) spec. Works across 10+ AI coding tools.
+
+## Benchmark
+
+Tested against **10,582 real malware packages** from the [Datadog malicious-software-packages-dataset](https://github.com/DataDog/malicious-software-packages-dataset):
+
+| Dataset | Packages | Detected | Rate |
+|---------|----------|----------|------|
+| npm malware | 8,806 | 8,806 | 100% |
+| PyPI malware | 1,776 | 1,776 | 100% |
+| **Total** | **10,582** | **10,582** | **100%** |
 
 ## Features
 
@@ -151,6 +145,24 @@ Three-tier approach beyond regex:
 
 Supports `// depsec:allow` inline comments to suppress individual lines.
 
+### Protected Installs
+
+After running `depsec setup`, all package installs are automatically monitored and sandboxed:
+
+```sh
+npm install lodash                    # auto-protected via shell hooks
+depsec protect npm install lodash     # explicit protection (same thing)
+depsec protect --no-sandbox npm install lodash  # skip sandbox for this install
+depsec protect --learn npm install    # record expected connections as baseline
+depsec protect --strict npm test      # fail on unexpected connections
+```
+
+The protection pipeline:
+1. **Preflight** — typosquatting detection via Levenshtein distance, install hook detection
+2. **Sandbox** — OS-level isolation masking ~/.ssh, ~/.aws, ~/.gnupg (bubblewrap/sandbox-exec/Docker)
+3. **Network monitor** — polls connections every 100ms, classifies as expected/unexpected/critical
+4. **File watchdog** — monitors file descriptors across process tree, detects sensitive reads
+
 ### LLM Triage
 
 Send findings to an LLM for classification (requires [OpenRouter](https://openrouter.ai) API key):
@@ -162,27 +174,6 @@ depsec scan . --triage-dry-run      # Preview what would be sent
 
 Results are cached (30-day TTL) so repeat scans don't re-query.
 
-### Persona Model
-
-Control finding visibility by confidence level:
-
-```sh
-depsec scan . --persona regular     # High-confidence only (default)
-depsec scan . --persona pedantic    # Medium+ confidence
-depsec scan . --persona auditor     # All findings
-depsec scan . --verbose             # Everything, no filtering
-```
-
-### Pre-commit Hook
-
-Block commits containing hardcoded secrets:
-
-```sh
-depsec setup --hook     # Install git pre-commit hook
-depsec setup --unhook   # Remove it
-depsec scan --staged    # Manually run on staged files only
-```
-
 ### Deep Package Audit
 
 LLM-powered 4-phase analysis of a specific package:
@@ -193,24 +184,13 @@ depsec audit shelljs --dry-run    # Preview capabilities
 depsec audit shelljs --budget 2.0 # Cap LLM spend at $2.00
 ```
 
-### Protected Installs
-
-Safe package installs with preflight checks, network monitoring, and file watchdog:
-
-```sh
-depsec protect npm install lodash              # full protection
-depsec protect --sandbox npm install lodash    # sandboxed install (bubblewrap/sandbox-exec/docker)
-depsec protect --learn npm install lodash      # record expected connections as baseline
-depsec protect --strict npm test               # fail on unexpected connections
-depsec protect --preflight-only npm install    # just typosquatting checks
-```
-
 ## Usage
 
 ### Scan
 
 ```sh
-depsec scan .                         # All checks
+depsec scan .                         # All checks (executive summary)
+depsec scan . --full                  # Detailed output
 depsec scan . --checks workflows,deps # Specific checks only
 depsec scan . --json                  # JSON output
 depsec scan . --format sarif          # SARIF output (for GitHub Code Scanning)
@@ -218,32 +198,34 @@ depsec scan . --format sarif          # SARIF output (for GitHub Code Scanning)
 
 **Exit codes:** 0 = pass, 1 = findings, 2 = error.
 
-### Auto-Fix
+### Fix
 
 ```sh
 depsec fix .            # Pin GitHub Actions to commit SHAs
 depsec fix . --dry-run  # Preview changes
 ```
 
-### Network Monitoring
-
-```sh
-depsec protect npm test                    # Watch network during command
-depsec protect --learn npm install         # Record expected connections
-depsec protect --strict npm test           # Fail on unexpected connections
-```
-
 ### Setup
 
 ```sh
-depsec setup                # Interactive wizard (checkboxes for what to enable)
+depsec setup                # Interactive wizard (recommended)
 depsec setup --all          # Install all defaults non-interactively (CI/LLM)
 depsec setup --hook         # Install pre-commit hook only
-depsec setup --baseline     # Generate network baseline
-depsec setup --shell        # Print shell aliases (for eval in shell RC)
-depsec setup --self-check   # Verify depsec binary integrity
 depsec setup --unhook       # Remove pre-commit hook
-depsec ci .                 # CI mode (SARIF output + exit codes)
+depsec setup --baseline     # Generate network baseline
+depsec setup --shell        # Print shell aliases (for eval in shell profile)
+depsec setup --self-check   # Verify depsec binary integrity
+```
+
+### CI
+
+```sh
+depsec ci .                 # SARIF output + exit codes for CI pipelines
+```
+
+### Utilities
+
+```sh
 depsec scorecard .          # Generate SVG scorecard image
 depsec badge .              # Output badge markdown
 depsec cache stats          # Show triage cache statistics
@@ -263,10 +245,10 @@ Scans `node_modules/`, `vendor/`, `.venv/` for malicious code (15 rules):
 | Rule | What it catches | Severity |
 |------|----------------|----------|
 | P001 | Shell execution via child_process (AST-aware) | High |
-| P002 | base64 decode → execute chains | Critical |
+| P002 | base64 decode -> execute chains | Critical |
 | P003 | HTTP calls to raw IP addresses | High |
 | P004 | File reads targeting ~/.ssh, ~/.aws, ~/.env | Critical |
-| P005 | Binary file read → byte extraction → execution | Critical |
+| P005 | Binary file read -> byte extraction -> execution | Critical |
 | P006 | postinstall scripts with network calls | High |
 | P008 | `new Function()` with dynamic input (AST-aware) | High |
 | P010 | Cloud IMDS credential probing (169.254.169.254) | Critical |
@@ -332,15 +314,11 @@ Detects dangerous capability combinations across packages:
 
 ### External Rules
 
-Download and apply community detection rules:
-
 ```sh
 depsec rules update        # Download rules from community repo
 depsec rules list          # Show active rules
 depsec rules add rule.toml # Add a custom rule file
 ```
-
-External rules are applied automatically during `depsec scan` and `depsec ci`.
 
 ## Configuration
 
@@ -358,6 +336,9 @@ skip_dirs = ["legacy-vendor"]            # Extra dirs to skip in pattern scan
 [patterns.allow]
 shelljs = ["DEPSEC-P001"]               # Allow P001 for shelljs specifically
 
+[protect]
+sandbox = false                          # Override sandbox default for this project
+
 [checks]
 enabled = ["workflows", "deps", "patterns", "secrets", "hygiene", "capabilities"]
 
@@ -372,11 +353,13 @@ external_rules = 0                        # Opt-in: weight for custom rules
 
 [triage]
 api_key_env = "OPENROUTER_API_KEY"       # Env var containing API key
-model = "anthropic/claude-sonnet-4-6"      # LLM model for triage
+model = "anthropic/claude-sonnet-4-6"    # LLM model for triage
 max_findings = 20                         # Max findings to triage per run
 timeout_seconds = 60
 cache_ttl_days = 30
 ```
+
+Global preferences are stored at `~/.depsec/config.toml` (created by `depsec setup`).
 
 ## Scoring
 
@@ -390,19 +373,22 @@ cache_ttl_days = 30
 
 ## Comparison
 
-| Feature | depsec | gitleaks | TruffleHog | GuardDog |
-|---------|--------|----------|------------|----------|
-| Secrets (regex) | 20 patterns | 800+ patterns | 800+ detectors | - |
-| Secrets (AST+entropy) | Yes | - | - | - |
-| Malware detection | 15 pattern rules | - | - | Yes |
-| AST-aware analysis | tree-sitter (JS/TS/Python) | - | - | semgrep |
-| Vulnerability scan | OSV (all ecosystems) | - | - | - |
-| Workflow security | 5 rules | - | - | - |
-| Network monitoring | Yes | - | - | - |
-| LLM triage | OpenRouter | - | - | - |
-| Reachability | Import analysis | - | - | - |
-| Single binary | Yes | Yes | Yes | No (Python) |
-| Zero config | Yes | Yes | Yes | Yes |
+| Feature | depsec | gitleaks | TruffleHog | GuardDog | zizmor | snyk |
+|---------|--------|----------|------------|----------|--------|------|
+| Language | Rust | Go | Go | Python | Rust | SaaS |
+| Single binary | Yes | Yes | Yes | No | Yes | No |
+| Secrets (regex) | 20 patterns | 800+ | 800+ | - | - | Yes |
+| Secrets (AST+entropy) | Yes | - | - | - | - | - |
+| Malware detection | 15 rules | - | - | Yes | - | - |
+| AST-aware analysis | tree-sitter | - | - | semgrep | - | - |
+| Vulnerability scan | OSV (all ecosystems) | - | - | - | - | Yes |
+| Workflow security | 5 rules | - | - | - | 34 rules | - |
+| Network monitoring | Yes | - | - | - | - | - |
+| Sandbox protection | Yes | - | - | - | - | - |
+| LLM triage | Yes | - | - | - | - | - |
+| Reachability | Yes | - | - | - | - | - |
+| Auto-fix | Yes | - | - | - | - | Yes |
+| Zero config | Yes | Yes | Yes | Yes | Yes | No |
 
 ## Design Principles
 
@@ -411,7 +397,7 @@ cache_ttl_days = 30
 3. **AST over regex** — tree-sitter eliminates false positives
 4. **No plugins** — closed attack surface
 5. **No secrets required** — pure read-only analysis (tokens optional)
-6. **14 direct dependencies** — minimal supply chain surface
+6. **15 direct dependencies** — minimal supply chain surface
 
 ## License
 

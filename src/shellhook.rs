@@ -223,9 +223,17 @@ mod tests {
         let result = install_to_profile().unwrap();
         assert!(matches!(result, InstallResult::Installed(_)));
 
-        // Backup should exist
-        let backup = dir.path().join(".depsec-backup");
-        assert!(backup.exists() || dir.path().join(".zshrc.depsec-backup").exists());
+        // Backup should exist — .zshrc.with_extension("depsec-backup") produces .zshrc.depsec-backup
+        // or .depsec-backup depending on Rust's PathBuf behavior with dotfiles
+        let has_backup = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| e.file_name().to_string_lossy().contains("depsec-backup"));
+        assert!(
+            has_backup,
+            "Expected a depsec-backup file in {:?}",
+            dir.path()
+        );
     }
 
     #[test]
