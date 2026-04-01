@@ -3,3 +3,11 @@ src/checks/secrets.rs:generic-client-secret:506
 src/checks/secrets.rs:generic-client-secret:526
 src/secrets_ast.rs:generic-client-secret:487
 src/secrets_ast.rs:generic-client-secret:515
+src/secrets_ast.rs:generic-api-key:549
+src/secrets_ast.rs:generic-api-key:550
+src/ast/ruby.rs:generic-api-key:609
+src/ast/ruby.rs:generic-api-key:610
+docs/plans/2026-04-01-feat-multi-language-tree-sitter-parity-plan.md:generic-client-secret:1559
+docs/plans/2026-04-01-feat-multi-language-tree-sitter-parity-plan.md:generic-client-secret:1589
+docs/plans/2026-04-01-feat-multi-language-tree-sitter-parity-plan.md:generic-api-key:687
+docs/plans/2026-04-01-feat-multi-language-tree-sitter-parity-plan.md:generic-api-key:1472

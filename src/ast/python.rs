@@ -365,7 +365,6 @@ fn find_dynamic_import(tree: &tree_sitter::Tree, source: &[u8], findings: &mut V
 
 /// Extract Python imports for reachability analysis.
 /// Returns a list of imported module names.
-#[cfg(test)]
 pub fn extract_imports(parser: &mut Parser, source: &str) -> Vec<String> {
     let tree = match parser.parse(source, None) {
         Some(t) => t,

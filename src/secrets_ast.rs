@@ -78,6 +78,10 @@ pub fn scan_for_secrets(root: &Path, files: &[std::path::PathBuf]) -> Vec<Findin
         .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
         .expect("TS language");
 
+    let mut py_parser = crate::ast::python::new_parser();
+    let mut rb_parser = crate::ast::ruby::new_parser();
+    let mut rs_parser = crate::ast::rust_lang::new_parser();
+
     let mut findings = Vec::new();
 
     for file in files {
@@ -103,14 +107,19 @@ pub fn scan_for_secrets(root: &Path, files: &[std::path::PathBuf]) -> Vec<Findin
             scan_js_ts(parser, &content, &rel_path, &mut findings);
         }
 
-        // Rust files: scan with regex (tree-sitter-rust not needed for const patterns)
+        // Rust files: scan with tree-sitter AST for const/static assignments
         if ext == "rs" {
-            scan_rust_constants(&content, &rel_path, &mut findings);
+            scan_rust_ast(&mut rs_parser, &content, &rel_path, &mut findings);
         }
 
         // Python files: scan with tree-sitter AST for assignments
-        if ext == "py" {
-            scan_python_ast(&content, &rel_path, &mut findings);
+        if ext == "py" || ext == "pyw" {
+            scan_python_ast(&mut py_parser, &content, &rel_path, &mut findings);
+        }
+
+        // Ruby files: scan with tree-sitter AST for constant assignments
+        if ext == "rb" || ext == "rake" || ext == "gemspec" {
+            scan_ruby_ast(&mut rb_parser, &content, &rel_path, &mut findings);
         }
     }
 
@@ -165,32 +174,42 @@ fn scan_js_ts(parser: &mut Parser, content: &str, file_path: &str, findings: &mu
     }
 }
 
-/// Scan Rust const/static declarations for hardcoded secrets
-fn scan_rust_constants(content: &str, file_path: &str, findings: &mut Vec<Finding>) {
-    // Pattern: const NAME: type = "value";
-    let re = regex::Regex::new(
-        r#"(?i)(?:const|static|let)\s+([A-Z_][A-Z0-9_]*)\s*:\s*[^=]+=\s*"([^"]+)""#,
-    )
-    .unwrap();
+/// Scan Rust const/static declarations for hardcoded secrets using tree-sitter AST
+fn scan_rust_ast(parser: &mut Parser, content: &str, file_path: &str, findings: &mut Vec<Finding>) {
+    let assignments = crate::ast::rust_lang::extract_assignments(parser, content);
 
-    for (line_num, line) in content.lines().enumerate() {
-        // Check for depsec:allow inline comment
-        if line.contains("depsec:allow") {
-            continue;
+    for (name, value, line) in assignments {
+        if let Some(src_line) = content.lines().nth(line.saturating_sub(1)) {
+            if src_line.contains("depsec:allow") {
+                continue;
+            }
         }
+        check_secret_candidate(&name, &value, file_path, line, findings);
+    }
+}
 
-        if let Some(caps) = re.captures(line) {
-            let name = caps.get(1).map(|m| m.as_str()).unwrap_or("");
-            let value = caps.get(2).map(|m| m.as_str()).unwrap_or("");
-            check_secret_candidate(name, value, file_path, line_num + 1, findings);
+/// Scan Ruby constant assignments for hardcoded secrets using tree-sitter AST
+fn scan_ruby_ast(parser: &mut Parser, content: &str, file_path: &str, findings: &mut Vec<Finding>) {
+    let assignments = crate::ast::ruby::extract_assignments(parser, content);
+
+    for (name, value, line) in assignments {
+        if let Some(src_line) = content.lines().nth(line.saturating_sub(1)) {
+            if src_line.contains("depsec:allow") {
+                continue;
+            }
         }
+        check_secret_candidate(&name, &value, file_path, line, findings);
     }
 }
 
 /// Scan Python assignments for hardcoded secrets using tree-sitter AST
-fn scan_python_ast(content: &str, file_path: &str, findings: &mut Vec<Finding>) {
-    let mut parser = crate::ast::python::new_parser();
-    let assignments = crate::ast::python::extract_assignments(&mut parser, content);
+fn scan_python_ast(
+    parser: &mut Parser,
+    content: &str,
+    file_path: &str,
+    findings: &mut Vec<Finding>,
+) {
+    let assignments = crate::ast::python::extract_assignments(parser, content);
 
     for (name, value, line) in assignments {
         // Check if line has depsec:allow
@@ -466,12 +485,11 @@ const CLIENT_ID: &str = "RSMvSFhq3H1aYUn_MJ-gMoYyiLOHx";
 const VERSION: &str = "1.0.0";
 const TEST_SECRET: &str = "fake-for-testing";
 "#;
-        let mut findings = Vec::new();
-        scan_rust_constants(content, "auth.rs", &mut findings);
+        let dir = tempfile::TempDir::new().unwrap();
+        let file = dir.path().join("auth.rs");
+        std::fs::write(&file, content).unwrap();
 
-        // Should find CLIENT_SECRET and CLIENT_ID, skip VERSION and TEST_SECRET
-        let _found_rules: std::collections::HashSet<_> =
-            findings.iter().map(|f| f.rule_id.as_str()).collect();
+        let findings = scan_for_secrets(dir.path(), &[file]);
         assert!(
             findings.iter().any(|f| f.message.contains("CLIENT_SECRET")),
             "Should detect CLIENT_SECRET"
@@ -492,9 +510,11 @@ const TEST_SECRET: &str = "fake-for-testing";
 const CLIENT_SECRET: &str = "real-secret-12345678"; // depsec:allow — rotated
 const ANOTHER_SECRET: &str = "also-a-real-secret-678";
 "#;
-        let mut findings = Vec::new();
-        scan_rust_constants(content, "auth.rs", &mut findings);
+        let dir = tempfile::TempDir::new().unwrap();
+        let file = dir.path().join("auth.rs");
+        std::fs::write(&file, content).unwrap();
 
+        let findings = scan_for_secrets(dir.path(), &[file]);
         // First one has depsec:allow — should be skipped
         // Second one should be detected
         assert_eq!(findings.len(), 1);
@@ -521,5 +541,28 @@ const ANOTHER_SECRET: &str = "also-a-real-secret-678";
         assert!(is_sequential("abcdefghijklmnop"));
         assert!(!is_sequential("aK3fR9xL"));
         assert!(!is_sequential("short"));
+    }
+
+    #[test]
+    fn test_ruby_constant_scanning() {
+        // gitleaks:allow — test fixture, not a real secret
+        let content = r#"
+API_KEY = "sk-1234567890abcdefghijklmnopqrstuv"
+VERSION = "1.0.0"
+TEST_SECRET = "fake-for-testing"
+"#;
+        let dir = tempfile::TempDir::new().unwrap();
+        let file = dir.path().join("config.rb");
+        std::fs::write(&file, content).unwrap();
+
+        let findings = scan_for_secrets(dir.path(), &[file]);
+        assert!(
+            findings.iter().any(|f| f.message.contains("API_KEY")),
+            "Should detect API_KEY in Ruby"
+        );
+        assert!(
+            !findings.iter().any(|f| f.message.contains("TEST_SECRET")),
+            "Should skip TEST_SECRET (has 'test' showstopper)"
+        );
     }
 }

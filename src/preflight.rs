@@ -249,6 +249,88 @@ const CRATES_TOP_PACKAGES: &[&str] = &[
     "tempfile",
 ];
 
+/// Top RubyGems packages
+const RUBYGEMS_TOP_PACKAGES: &[&str] = &[
+    "rails",
+    "rake",
+    "bundler",
+    "rspec",
+    "devise",
+    "puma",
+    "sidekiq",
+    "nokogiri",
+    "activerecord",
+    "actionpack",
+    "activesupport",
+    "actionview",
+    "actionmailer",
+    "activemodel",
+    "activejob",
+    "activestorage",
+    "actioncable",
+    "actiontext",
+    "pg",
+    "mysql2",
+    "sqlite3",
+    "redis",
+    "faraday",
+    "rest-client",
+    "httparty",
+    "sinatra",
+    "rack",
+    "unicorn",
+    "thin",
+    "capistrano",
+    "rspec-core",
+    "rspec-expectations",
+    "rspec-mocks",
+    "minitest",
+    "rubocop",
+    "simplecov",
+    "factory_bot",
+    "faker",
+    "dotenv",
+    "figaro",
+    "jwt",
+    "bcrypt",
+    "pundit",
+    "cancancan",
+    "omniauth",
+    "doorkeeper",
+    "kaminari",
+    "pagy",
+    "ransack",
+    "jbuilder",
+    "slim",
+    "haml",
+    "sassc",
+    "uglifier",
+    "webpacker",
+    "turbo-rails",
+    "stimulus-rails",
+    "importmap-rails",
+    "sprockets",
+    "bootsnap",
+    "tzinfo",
+    "i18n",
+    "thor",
+    "concurrent-ruby",
+    "mini_portile2",
+    "ffi",
+    "json",
+    "bigdecimal",
+    "drb",
+    "net-smtp",
+    "net-pop",
+    "net-imap",
+    "stripe",
+    "aws-sdk",
+    "aws-sdk-s3",
+    "resque",
+    "delayed_job",
+    "whenever",
+];
+
 pub struct PreflightResult {
     pub findings: Vec<Finding>,
     pub packages_checked: usize,
@@ -339,6 +421,7 @@ fn check_typosquatting(pkg: &parsers::Package, findings: &mut Vec<Finding>) {
         parsers::Ecosystem::Npm => NPM_TOP_PACKAGES,
         parsers::Ecosystem::PyPI => PYPI_TOP_PACKAGES,
         parsers::Ecosystem::CratesIo => CRATES_TOP_PACKAGES,
+        parsers::Ecosystem::RubyGems => RUBYGEMS_TOP_PACKAGES,
         _ => return,
     };
 
@@ -654,6 +737,21 @@ mod tests {
         };
         check_typosquatting(&pkg, &mut findings);
         assert!(findings.is_empty());
+    }
+
+    #[test]
+    fn test_rubygems_typosquat_detection() {
+        let mut findings = Vec::new();
+        let pkg = parsers::Package {
+            name: "raills".into(), // typosquat of "rails"
+            version: "7.0.0".into(),
+            ecosystem: parsers::Ecosystem::RubyGems,
+        };
+        check_typosquatting(&pkg, &mut findings);
+        assert!(
+            !findings.is_empty(),
+            "Should detect 'raills' as typosquat of 'rails'"
+        );
     }
 
     #[test]

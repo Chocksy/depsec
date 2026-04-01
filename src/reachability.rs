@@ -16,8 +16,14 @@ pub struct AppImports {
 /// Directories to scan for app source code
 const SOURCE_DIRS: &[&str] = &["src", "app", "lib", "packages", "apps"];
 
-/// File extensions to parse for imports
-const SOURCE_EXTENSIONS: &[&str] = &["js", "mjs", "cjs", "ts", "mts", "cts", "jsx", "tsx"];
+/// File extensions to parse for imports (JS/TS)
+const SOURCE_EXTENSIONS_JS: &[&str] = &["js", "mjs", "cjs", "ts", "mts", "cts", "jsx", "tsx"];
+/// Python extensions
+const SOURCE_EXTENSIONS_PY: &[&str] = &["py"];
+/// Ruby extensions
+const SOURCE_EXTENSIONS_RB: &[&str] = &["rb", "rake"];
+/// Rust extensions
+const SOURCE_EXTENSIONS_RS: &[&str] = &["rs"];
 
 /// Scan the project's own source files to find which packages are imported.
 /// This only scans YOUR code, not node_modules.
@@ -35,7 +41,9 @@ pub fn scan_app_imports(root: &Path) -> AppImports {
         .set_language(&tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
         .expect("failed to set TS language");
 
-    // devDependencies available via read_dev_dependencies(root) if needed
+    let mut py_parser = crate::ast::python::new_parser();
+    let mut rb_parser = crate::ast::ruby::new_parser();
+    let mut rs_parser = crate::ast::rust_lang::new_parser();
 
     // Find all source files
     for source_dir in SOURCE_DIRS {
@@ -48,7 +56,15 @@ pub fn scan_app_imports(root: &Path) -> AppImports {
             .into_iter()
             .filter_entry(|e| {
                 let name = e.file_name().to_str().unwrap_or("");
-                name != "node_modules" && name != ".svelte-kit" && name != "dist" && name != "build"
+                name != "node_modules"
+                    && name != ".svelte-kit"
+                    && name != "dist"
+                    && name != "build"
+                    && name != "__pycache__"
+                    && name != ".venv"
+                    && name != "venv"
+                    && name != "target"
+                    && name != "vendor"
             })
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().is_file())
@@ -67,8 +83,8 @@ pub fn scan_app_imports(root: &Path) -> AppImports {
                 .to_string_lossy()
                 .to_string();
 
-            if SOURCE_EXTENSIONS.contains(&ext) {
-                // Parse with tree-sitter
+            if SOURCE_EXTENSIONS_JS.contains(&ext) {
+                // Parse JS/TS with tree-sitter
                 let parser = if ext == "ts" || ext == "mts" || ext == "cts" || ext == "tsx" {
                     &mut ts_parser
                 } else {
@@ -93,6 +109,33 @@ pub fn scan_app_imports(root: &Path) -> AppImports {
                         &mut packages,
                         &mut locations,
                     );
+                }
+            } else if SOURCE_EXTENSIONS_PY.contains(&ext) {
+                let imports = crate::ast::python::extract_imports(&mut py_parser, &content);
+                for module in imports {
+                    packages.insert(module.clone());
+                    locations
+                        .entry(module)
+                        .or_default()
+                        .push((rel_path.clone(), 0));
+                }
+            } else if SOURCE_EXTENSIONS_RB.contains(&ext) {
+                let requires = crate::ast::ruby::extract_requires(&mut rb_parser, &content);
+                for module in requires {
+                    packages.insert(module.clone());
+                    locations
+                        .entry(module)
+                        .or_default()
+                        .push((rel_path.clone(), 0));
+                }
+            } else if SOURCE_EXTENSIONS_RS.contains(&ext) {
+                let uses = crate::ast::rust_lang::extract_uses(&mut rs_parser, &content);
+                for crate_name in uses {
+                    packages.insert(crate_name.clone());
+                    locations
+                        .entry(crate_name)
+                        .or_default()
+                        .push((rel_path.clone(), 0));
                 }
             }
         }
@@ -462,5 +505,53 @@ import './relative-file';
         let dir = tempfile::TempDir::new().unwrap();
         let imports = scan_app_imports(dir.path());
         assert!(imports.packages.is_empty());
+    }
+
+    #[test]
+    fn test_scan_app_imports_python() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(
+            src.join("main.py"),
+            "import requests\nfrom flask import Flask\n",
+        )
+        .unwrap();
+
+        let imports = scan_app_imports(dir.path());
+        assert!(imports.packages.contains("requests"));
+        assert!(imports.packages.contains("flask"));
+    }
+
+    #[test]
+    fn test_scan_app_imports_ruby() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let src = dir.path().join("lib");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(
+            src.join("app.rb"),
+            "require \"json\"\nrequire \"active_support/core_ext\"\n",
+        )
+        .unwrap();
+
+        let imports = scan_app_imports(dir.path());
+        assert!(imports.packages.contains("json"));
+        assert!(imports.packages.contains("active_support"));
+    }
+
+    #[test]
+    fn test_scan_app_imports_rust() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(
+            src.join("main.rs"),
+            "use serde::Serialize;\nuse tokio::runtime;\n",
+        )
+        .unwrap();
+
+        let imports = scan_app_imports(dir.path());
+        assert!(imports.packages.contains("serde"));
+        assert!(imports.packages.contains("tokio"));
     }
 }

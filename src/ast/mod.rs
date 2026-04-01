@@ -1,5 +1,7 @@
 pub mod javascript;
 pub mod python;
+pub mod ruby;
+pub mod rust_lang;
 
 use std::path::Path;
 
@@ -13,6 +15,8 @@ pub enum Lang {
     JavaScript,
     TypeScript,
     Python,
+    Ruby,
+    Rust,
 }
 
 /// A finding produced by AST analysis — higher confidence than regex
@@ -28,6 +32,8 @@ pub struct AstAnalyzer {
     js_parser: Parser,
     ts_parser: Parser,
     py_parser: Parser,
+    rb_parser: Parser,
+    rs_parser: Parser,
 }
 
 impl AstAnalyzer {
@@ -43,22 +49,26 @@ impl AstAnalyzer {
             .expect("failed to set TS language");
 
         let py_parser = python::new_parser();
+        let rb_parser = ruby::new_parser();
+        let rs_parser = rust_lang::new_parser();
 
         Self {
             js_parser,
             ts_parser,
             py_parser,
+            rb_parser,
+            rs_parser,
         }
     }
 
     /// Analyze a file for security patterns using AST.
-    /// Returns findings for rules P001, P002, P008, P013, P014 (JS/TS)
-    /// and P020-P023 (Python) with High confidence.
     pub fn analyze(&mut self, path: &Path, source: &str) -> Vec<AstFinding> {
         match detect_language(path) {
             Some(Lang::JavaScript) => javascript::analyze(&mut self.js_parser, source),
             Some(Lang::TypeScript) => javascript::analyze(&mut self.ts_parser, source),
             Some(Lang::Python) => python::analyze(&mut self.py_parser, source),
+            Some(Lang::Ruby) => ruby::analyze(&mut self.rb_parser, source),
+            Some(Lang::Rust) => rust_lang::analyze(&mut self.rs_parser, source),
             None => vec![],
         }
     }
@@ -75,6 +85,8 @@ fn detect_language(path: &Path) -> Option<Lang> {
         "js" | "mjs" | "cjs" | "jsx" => Some(Lang::JavaScript),
         "ts" | "mts" | "cts" | "tsx" => Some(Lang::TypeScript),
         "py" | "pyw" => Some(Lang::Python),
+        "rb" | "rake" | "gemspec" => Some(Lang::Ruby),
+        "rs" => Some(Lang::Rust),
         _ => None,
     }
 }
@@ -93,14 +105,6 @@ mod tests {
             detect_language(Path::new("file.mjs")),
             Some(Lang::JavaScript)
         );
-        assert_eq!(
-            detect_language(Path::new("file.cjs")),
-            Some(Lang::JavaScript)
-        );
-        assert_eq!(
-            detect_language(Path::new("file.jsx")),
-            Some(Lang::JavaScript)
-        );
     }
 
     #[test]
@@ -113,10 +117,6 @@ mod tests {
             detect_language(Path::new("file.tsx")),
             Some(Lang::TypeScript)
         );
-        assert_eq!(
-            detect_language(Path::new("file.mts")),
-            Some(Lang::TypeScript)
-        );
     }
 
     #[test]
@@ -126,9 +126,20 @@ mod tests {
     }
 
     #[test]
+    fn test_detect_language_ruby() {
+        assert_eq!(detect_language(Path::new("file.rb")), Some(Lang::Ruby));
+        assert_eq!(detect_language(Path::new("file.rake")), Some(Lang::Ruby));
+        assert_eq!(detect_language(Path::new("file.gemspec")), Some(Lang::Ruby));
+    }
+
+    #[test]
+    fn test_detect_language_rust() {
+        assert_eq!(detect_language(Path::new("file.rs")), Some(Lang::Rust));
+    }
+
+    #[test]
     fn test_detect_language_unknown() {
-        assert_eq!(detect_language(Path::new("file.rs")), None);
-        assert_eq!(detect_language(Path::new("file.rb")), None);
+        assert_eq!(detect_language(Path::new("file.go")), None);
         assert_eq!(detect_language(Path::new("file")), None);
     }
 

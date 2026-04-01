@@ -34,6 +34,16 @@ fn rule_info(rule_id: &str) -> Option<RuleInfo> {
         "DEPSEC-P021" => RuleInfo { name: "Subprocess Shell Injection", narrative: "Uses subprocess.Popen/call/run with shell=True. When combined with user-controlled input, this allows command injection via shell metacharacters." },
         "DEPSEC-P022" => RuleInfo { name: "OS Command Execution", narrative: "Calls os.system() or os.popen() which execute commands through the system shell. These are deprecated in favor of subprocess and are more vulnerable to injection." },
         "DEPSEC-P023" => RuleInfo { name: "Dynamic Module Import", narrative: "Uses __import__() to dynamically load a module at runtime. When the module name is computed from variables, this can be used to load attacker-controlled code." },
+        // Ruby rules
+        "DEPSEC-P030" => RuleInfo { name: "Ruby Dynamic Execution", narrative: "Calls eval(), instance_eval(), class_eval(), or module_eval() in Ruby. These execute arbitrary code strings at runtime. Common in metaprogramming but dangerous if input is user-controlled." },
+        "DEPSEC-P031" => RuleInfo { name: "Ruby Shell Execution", narrative: "Executes shell commands via system(), backticks, %x{}, IO.popen, or Kernel.exec. These invoke a system shell and are vulnerable to command injection if arguments include user input." },
+        "DEPSEC-P032" => RuleInfo { name: "Ruby Dynamic Dispatch", narrative: "Uses send() or public_send() to call methods by name at runtime. When the method name comes from user input, this can invoke arbitrary methods including private ones." },
+        "DEPSEC-P033" => RuleInfo { name: "Ruby Dynamic Require", narrative: "Calls require() or load() with a variable argument instead of a string literal. This can be used to load attacker-controlled code at runtime." },
+        // Rust rules
+        "DEPSEC-P040" => RuleInfo { name: "Process Execution", narrative: "Uses std::process::Command to spawn external processes. If command arguments include user input, this enables command injection." },
+        "DEPSEC-P041" => RuleInfo { name: "Unsafe Block", narrative: "Contains an unsafe block that bypasses Rust's memory safety guarantees. In dependency code, unsafe blocks are potential sources of memory corruption vulnerabilities." },
+        "DEPSEC-P042" => RuleInfo { name: "FFI Declaration", narrative: "Declares foreign function interface (extern) bindings. FFI code operates outside Rust's safety model and can introduce undefined behavior." },
+        "DEPSEC-P043" => RuleInfo { name: "Compile-Time File Inclusion", narrative: "Uses include_bytes!() or include_str!() to embed file contents at compile time. In dependency code, this could embed unexpected payloads." },
         _ => return None,
     })
 }
