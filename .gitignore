@@ -6,3 +6,4 @@
 credentials.json
 .env.local
 .DS_Store
+coverage/
