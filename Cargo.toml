@@ -29,6 +29,9 @@ tree-sitter-python = "0.23"
 tree-sitter-ruby = "0.23"
 tree-sitter-rust = "0.23"
 
+[package.metadata.cargo-machete]
+ignored = ["tree-sitter-ruby", "tree-sitter-rust"]
+
 [dev-dependencies]
 tempfile = "3"
 mockall = "0.13"
