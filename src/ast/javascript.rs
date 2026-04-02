@@ -122,6 +122,60 @@ fn find_dangerous_imports(tree: &tree_sitter::Tree, source: &[u8]) -> HashSet<St
         }
     }
 
+    // Query: process.mainModule.require('child_process')
+    // This is an alternative way to access require() that bypasses normal import tracking
+    let mainmodule_query = Query::new(
+        &tree.language(),
+        r#"
+        (call_expression
+          function: (member_expression
+            object: (member_expression
+              object: (identifier) @proc
+              property: (property_identifier) @mm)
+            property: (property_identifier) @req)
+          arguments: (arguments
+            (string (string_fragment) @module))
+          (#eq? @proc "process")
+          (#eq? @mm "mainModule")
+          (#eq? @req "require"))
+        "#,
+    );
+
+    if let Ok(query) = mainmodule_query {
+        let module_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "module")
+            .unwrap();
+
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), source);
+
+        while let Some(m) = matches.next() {
+            if let Some(cap) = m.captures.iter().find(|c| c.index as usize == module_idx) {
+                let module_name = cap.node.utf8_text(source).unwrap_or("");
+                if DANGEROUS_MODULES.contains(&module_name) {
+                    // Walk up from the string_fragment → string → arguments → call_expression
+                    // → variable_declarator to find the assigned name
+                    let mut node = cap.node;
+                    while let Some(parent) = node.parent() {
+                        if parent.kind() == "variable_declarator" {
+                            if let Some(name_node) = parent.child_by_field_name("name") {
+                                if name_node.kind() == "identifier" {
+                                    if let Ok(name) = name_node.utf8_text(source) {
+                                        aliases.insert(name.to_string());
+                                    }
+                                }
+                            }
+                            break;
+                        }
+                        node = parent;
+                    }
+                }
+            }
+        }
+    }
+
     // Query: import { exec } from 'child_process'
     // Also: import cp from 'child_process'
     let import_query = Query::new(
@@ -380,14 +434,46 @@ fn severity_arg_label(severity: &Severity) -> &'static str {
 }
 
 /// P008: Find new Function() with variable args
+/// Also detects: new global.Function(), new globalThis.Function(),
+/// and const Fn = Function; new Fn() alias patterns.
 fn find_dynamic_function(tree: &tree_sitter::Tree, source: &[u8], findings: &mut Vec<AstFinding>) {
+    // Collect Function aliases: const Fn = Function; const F = globalThis.Function;
+    let mut function_aliases: HashSet<String> = HashSet::new();
+    function_aliases.insert("Function".into());
+
+    let alias_query = Query::new(
+        &tree.language(),
+        r#"
+        (variable_declarator
+          name: (identifier) @alias
+          value: (identifier) @val
+          (#eq? @val "Function"))
+        "#,
+    );
+    if let Ok(query) = alias_query {
+        let alias_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "alias")
+            .unwrap();
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), source);
+        while let Some(m) = matches.next() {
+            if let Some(cap) = m.captures.iter().find(|c| c.index as usize == alias_idx) {
+                if let Ok(name) = cap.node.utf8_text(source) {
+                    function_aliases.insert(name.to_string());
+                }
+            }
+        }
+    }
+
+    // Query 1: new Function(args) — bare identifier
     let query = Query::new(
         &tree.language(),
         r#"
         (new_expression
           constructor: (identifier) @ctor
-          arguments: (arguments) @args
-          (#eq? @ctor "Function"))
+          arguments: (arguments) @args)
         "#,
     );
 
@@ -413,6 +499,11 @@ fn find_dynamic_function(tree: &tree_sitter::Tree, source: &[u8], findings: &mut
                 continue;
             };
 
+            let ctor_text = ctor_cap.node.utf8_text(source).unwrap_or("");
+            if !function_aliases.contains(ctor_text) {
+                continue;
+            }
+
             let severity = classify_arg_severity(&args_cap.node, source);
             let line = ctor_cap.node.start_position().row + 1;
 
@@ -421,7 +512,57 @@ fn find_dynamic_function(tree: &tree_sitter::Tree, source: &[u8], findings: &mut
                 severity,
                 confidence: Confidence::High,
                 message: format!(
-                    "new Function() with {} argument",
+                    "new {ctor_text}() with {} argument",
+                    severity_arg_label(&severity)
+                ),
+                line,
+            });
+        }
+    }
+
+    // Query 2: new global.Function(args) / new globalThis.Function(args) — member_expression
+    let member_query = Query::new(
+        &tree.language(),
+        r#"
+        (new_expression
+          constructor: (member_expression
+            property: (property_identifier) @prop)
+          arguments: (arguments) @args
+          (#eq? @prop "Function"))
+        "#,
+    );
+
+    if let Ok(query) = member_query {
+        let prop_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "prop")
+            .unwrap();
+        let args_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "args")
+            .unwrap();
+
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), source);
+
+        while let Some(m) = matches.next() {
+            let prop_cap = m.captures.iter().find(|c| c.index as usize == prop_idx);
+            let args_cap = m.captures.iter().find(|c| c.index as usize == args_idx);
+            let (Some(prop_cap), Some(args_cap)) = (prop_cap, args_cap) else {
+                continue;
+            };
+
+            let severity = classify_arg_severity(&args_cap.node, source);
+            let line = prop_cap.node.start_position().row + 1;
+
+            findings.push(AstFinding {
+                rule_id: "DEPSEC-P008".into(),
+                severity,
+                confidence: Confidence::High,
+                message: format!(
+                    "new *.Function() with {} argument",
                     severity_arg_label(&severity)
                 ),
                 line,
@@ -506,6 +647,63 @@ fn find_dynamic_require(tree: &tree_sitter::Tree, source: &[u8], findings: &mut 
                 message: format!(
                     "Dynamic require() with {arg_label} argument — module name computed at runtime"
                 ),
+                line,
+            });
+        }
+    }
+
+    // Detect (0, require)(name) — indirect require via comma/sequence expression
+    // This is a common evasion technique: the comma operator returns the last value
+    let indirect_query = Query::new(
+        &tree.language(),
+        r#"
+        (call_expression
+          function: (parenthesized_expression
+            (sequence_expression
+              (_)
+              (identifier) @fn))
+          arguments: (arguments . (_) @arg)
+          (#eq? @fn "require"))
+        "#,
+    );
+
+    if let Ok(query) = indirect_query {
+        let fn_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "fn")
+            .unwrap();
+        let arg_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "arg")
+            .unwrap();
+
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), source);
+
+        while let Some(m) = matches.next() {
+            let fn_cap = m.captures.iter().find(|c| c.index as usize == fn_idx);
+            let arg_cap = m.captures.iter().find(|c| c.index as usize == arg_idx);
+            let (Some(fn_cap), Some(arg_cap)) = (fn_cap, arg_cap) else {
+                continue;
+            };
+
+            let arg_kind = arg_cap.node.kind();
+            let line = fn_cap.node.start_position().row + 1;
+
+            // Any indirect require is suspicious regardless of argument type
+            let severity = if arg_kind == "string" || arg_kind == "string_fragment" {
+                Severity::High // Even static string through indirect require is suspicious
+            } else {
+                Severity::Critical
+            };
+
+            findings.push(AstFinding {
+                rule_id: "DEPSEC-P013".into(),
+                severity,
+                confidence: Confidence::High,
+                message: "Indirect (0, require)() call — evasion of static analysis".into(),
                 line,
             });
         }
@@ -1019,5 +1217,87 @@ mod tests {
             .filter(|f| f.rule_id == "DEPSEC-P013")
             .collect();
         assert!(p013.is_empty(), "Static import() should NOT be flagged");
+    }
+
+    // --- E17: new global.Function() ---
+
+    #[test]
+    fn test_global_function_detected() {
+        let findings = parse_js(
+            r#"
+            const code = "alert(1)";
+            new global.Function(code)();
+        "#,
+        );
+        let p008: Vec<_> = findings
+            .iter()
+            .filter(|f| f.rule_id == "DEPSEC-P008")
+            .collect();
+        assert_eq!(
+            p008.len(),
+            1,
+            "new global.Function() should be detected as P008"
+        );
+    }
+
+    // --- E18: const Fn = Function; new Fn() ---
+
+    #[test]
+    fn test_function_alias_detected() {
+        let findings = parse_js(
+            r#"
+            const Fn = Function;
+            const code = "alert(1)";
+            new Fn(code)();
+        "#,
+        );
+        let p008: Vec<_> = findings
+            .iter()
+            .filter(|f| f.rule_id == "DEPSEC-P008")
+            .collect();
+        assert_eq!(
+            p008.len(),
+            1,
+            "const Fn = Function; new Fn() should be detected as P008"
+        );
+    }
+
+    // --- E16: (0, require)(name) ---
+
+    #[test]
+    fn test_indirect_require_detected() {
+        let findings = parse_js(
+            r#"
+            const cp = (0, require)('child_process');
+            cp.exec('whoami');
+        "#,
+        );
+        let p013: Vec<_> = findings
+            .iter()
+            .filter(|f| f.rule_id == "DEPSEC-P013")
+            .collect();
+        assert_eq!(p013.len(), 1, "(0, require)() should be detected as P013");
+        assert!(p013[0].message.contains("Indirect"));
+    }
+
+    // --- E08: process.mainModule.require() ---
+
+    #[test]
+    fn test_mainmodule_require_detected() {
+        let findings = parse_js(
+            r#"
+            const cp = process.mainModule.require('child_process');
+            cp.exec('whoami');
+        "#,
+        );
+        let p001: Vec<_> = findings
+            .iter()
+            .filter(|f| f.rule_id == "DEPSEC-P001")
+            .collect();
+        assert_eq!(
+            p001.len(),
+            1,
+            "process.mainModule.require('child_process') should track alias and detect exec"
+        );
     }
 }

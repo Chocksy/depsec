@@ -57,7 +57,7 @@ pub fn run_all() -> Vec<VectorResult> {
             name: "hn-mainmodule-require",
             layer: Layer::StaticScan,
             technique: "process.mainModule.require()",
-            expected: Expected::Miss,
+            expected: Expected::Detect, // AST now tracks mainModule.require aliases
             test_fn: test_mainmodule_require,
         },
         EvasionTest {
@@ -97,7 +97,7 @@ pub fn run_all() -> Vec<VectorResult> {
             name: "hn-indirect-require",
             layer: Layer::StaticScan,
             technique: "(0, require)(name)",
-            expected: Expected::Miss,
+            expected: Expected::Detect, // AST now detects sequence_expression indirect require
             test_fn: test_indirect_require,
         },
         EvasionTest {
@@ -105,7 +105,7 @@ pub fn run_all() -> Vec<VectorResult> {
             name: "hn-global-function",
             layer: Layer::StaticScan,
             technique: "new global.Function(code)",
-            expected: Expected::Miss,
+            expected: Expected::Detect, // AST now matches member_expression constructor
             test_fn: test_global_function,
         },
         EvasionTest {
@@ -113,7 +113,7 @@ pub fn run_all() -> Vec<VectorResult> {
             name: "hn-alias-function",
             layer: Layer::StaticScan,
             technique: "const Fn = Function; new Fn()",
-            expected: Expected::Miss,
+            expected: Expected::Detect, // AST now tracks Function aliases
             test_fn: test_alias_function,
         },
         EvasionTest {
@@ -408,6 +408,7 @@ import(mod).then(m => m.exec('whoami'));
 
 fn test_indirect_require() -> bool {
     // E16: (0, require)(name) — comma operator, not a direct require call
+    // AST detects the indirect require pattern as P013, not P001
     let dir = ScanPackageBuilder::npm("hn-indirect-require")
         .file(
             "index.js",
@@ -418,7 +419,7 @@ cp.exec('whoami');
         )
         .build();
     let output = run_scan(dir.path(), "patterns");
-    output.contains("DEPSEC-P001")
+    output.contains("DEPSEC-P013")
 }
 
 fn test_global_function() -> bool {
