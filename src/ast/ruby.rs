@@ -36,6 +36,9 @@ pub fn analyze(parser: &mut Parser, source: &str) -> Vec<AstFinding> {
     // P033: require with variable/interpolated args
     find_dynamic_require(&tree, source_bytes, &mut findings);
 
+    // P034: open("|cmd") pipe execution
+    find_pipe_open(&tree, source_bytes, &mut findings);
+
     findings
 }
 
@@ -347,6 +350,52 @@ fn find_dynamic_require(tree: &tree_sitter::Tree, source: &[u8], findings: &mut 
                     ),
                     line,
                 });
+            }
+        }
+    }
+}
+
+/// P034: open("|cmd") — pipe execution via Ruby's Kernel#open
+fn find_pipe_open(tree: &tree_sitter::Tree, source: &[u8], findings: &mut Vec<AstFinding>) {
+    // Ruby's open("|cmd") spawns a shell. We match open() calls where the
+    // first string argument starts with "|".
+    let query = Query::new(
+        &tree.language(),
+        r#"
+        (call
+          method: (identifier) @fn
+          arguments: (argument_list
+            (string (string_content) @arg))
+          (#eq? @fn "open"))
+        "#,
+    );
+
+    if let Ok(query) = query {
+        let arg_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "arg")
+            .unwrap();
+
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), source);
+
+        while let Some(m) = matches.next() {
+            if let Some(arg_cap) = m.captures.iter().find(|c| c.index as usize == arg_idx) {
+                let arg_text = arg_cap.node.utf8_text(source).unwrap_or("");
+                if arg_text.starts_with('|') {
+                    let line = arg_cap.node.start_position().row + 1;
+                    findings.push(AstFinding {
+                        rule_id: "DEPSEC-P034".into(),
+                        severity: Severity::High,
+                        confidence: Confidence::High,
+                        message: format!(
+                            "open(\"|\") — pipe execution via Kernel#open: {}",
+                            &arg_text[..arg_text.len().min(50)]
+                        ),
+                        line,
+                    });
+                }
             }
         }
     }

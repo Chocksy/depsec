@@ -72,14 +72,9 @@ impl AstAnalyzer {
             None => vec![],
         }
     }
-
-    /// Returns true if this file can be analyzed by the AST engine
-    pub fn can_analyze(path: &Path) -> bool {
-        detect_language(path).is_some()
-    }
 }
 
-fn detect_language(path: &Path) -> Option<Lang> {
+pub fn detect_language(path: &Path) -> Option<Lang> {
     let ext = path.extension().and_then(|e| e.to_str())?;
     match ext {
         "js" | "mjs" | "cjs" | "jsx" => Some(Lang::JavaScript),

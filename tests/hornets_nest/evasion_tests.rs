@@ -89,7 +89,7 @@ pub fn run_all() -> Vec<VectorResult> {
             name: "hn-dynamic-import",
             layer: Layer::StaticScan,
             technique: "Dynamic import() expression",
-            expected: Expected::Miss,
+            expected: Expected::Detect, // needs_ast gate now includes import(
             test_fn: test_dynamic_import,
         },
         EvasionTest {
@@ -121,7 +121,7 @@ pub fn run_all() -> Vec<VectorResult> {
             name: "hn-fromcharcode-add",
             layer: Layer::StaticScan,
             technique: "fromCharCode + addition (not XOR)",
-            expected: Expected::Miss,
+            expected: Expected::Detect, // P014 regex broadened to include +/-
             test_fn: test_fromcharcode_add,
         },
         EvasionTest {
@@ -137,15 +137,15 @@ pub fn run_all() -> Vec<VectorResult> {
             name: "hn-ruby-pipe-open",
             layer: Layer::StaticScan,
             technique: r#"open("|#{cmd}") Ruby pipe exec"#,
-            expected: Expected::Miss,
+            expected: Expected::Detect, // New P034 rule detects open("|...")
             test_fn: test_ruby_pipe_open,
         },
         EvasionTest {
             id: "E24",
             name: "hn-large-bundle",
             layer: Layer::StaticScan,
-            technique: ">500KB file (skipped by scanner)",
-            expected: Expected::Miss,
+            technique: ">500KB file (sampled head+tail)",
+            expected: Expected::Detect, // Large files now sampled instead of skipped
             test_fn: test_large_bundle,
         },
         EvasionTest {
@@ -169,7 +169,7 @@ pub fn run_all() -> Vec<VectorResult> {
             name: "hn-pickle-deser",
             layer: Layer::StaticScan,
             technique: "pickle.loads() Python deserialization",
-            expected: Expected::Miss,
+            expected: Expected::Detect, // New P024 rule detects pickle.loads
             test_fn: test_pickle_deser,
         },
         EvasionTest {
@@ -600,8 +600,11 @@ fn evasion_dynamic_property() {
 
 #[test]
 fn evasion_large_bundle() {
-    // Known gap — >500KB files are skipped
-    assert!(!test_large_bundle(), "E24: Large bundle should evade (>500KB is skipped). If detected, the size limit was changed — update evasion test");
+    // Large files are now sampled (head+tail 50KB) instead of skipped
+    assert!(
+        test_large_bundle(),
+        "E24: Large bundle should be detected via head+tail sampling"
+    );
 }
 
 #[test]
@@ -615,11 +618,11 @@ fn evasion_python_alias() {
 
 #[test]
 fn evasion_fromcharcode_add() {
-    // Known gap — regex requires XOR (^), not addition (+)
-    let detected = test_fromcharcode_add();
-    if detected {
-        eprintln!("SURPRISE: E20 hn-fromcharcode-add was detected! Update expected to 'detect'");
-    }
+    // P014 regex broadened to include + and - operators
+    assert!(
+        test_fromcharcode_add(),
+        "E20: fromCharCode + addition should be detected after P014 regex fix"
+    );
 }
 
 /// Run the full scorecard and print results

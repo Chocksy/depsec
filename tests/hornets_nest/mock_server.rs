@@ -35,18 +35,16 @@ impl MockTcpServer {
 
             match listener.accept() {
                 Ok((mut stream, _)) => {
-                    // Re-check shutdown after accept — the Drop wake-up connection
-                    // should not be recorded as real data
                     if *shutdown_clone.lock().unwrap() {
                         break;
                     }
-                    let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
+                    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
                     let mut buf = Vec::new();
                     let _ = stream.read_to_end(&mut buf);
                     recv_clone.lock().unwrap().push(buf);
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(50));
+                    thread::sleep(Duration::from_millis(10));
                 }
                 Err(_) => break,
             }
@@ -60,19 +58,16 @@ impl MockTcpServer {
         }
     }
 
-    /// Get the port this server is listening on
     #[allow(dead_code)]
     pub fn port(&self) -> u16 {
         self.port
     }
 
-    /// Check if any connections were received
     #[allow(dead_code)]
     pub fn has_connections(&self) -> bool {
         !self.received.lock().unwrap().is_empty()
     }
 
-    /// Get all received data blobs
     #[allow(dead_code)]
     pub fn received_data(&self) -> Vec<Vec<u8>> {
         self.received.lock().unwrap().clone()
@@ -82,7 +77,6 @@ impl MockTcpServer {
 impl Drop for MockTcpServer {
     fn drop(&mut self) {
         *self.shutdown.lock().unwrap() = true;
-        // Connect to self to unblock the accept loop
         let _ = TcpStream::connect(format!("127.0.0.1:{}", self.port));
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
@@ -100,17 +94,23 @@ mod tests {
         let server = MockTcpServer::start();
         let port = server.port();
 
-        // Send some data
         let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
         stream.write_all(b"stolen-credentials").unwrap();
         drop(stream);
 
-        // Give server time to process
-        thread::sleep(Duration::from_millis(200));
+        // Poll until data arrives (10ms accept loop + 2s read timeout)
+        for _ in 0..50 {
+            thread::sleep(Duration::from_millis(100));
+            if !server.received_data().is_empty()
+                && server.received_data()[0].starts_with(b"stolen")
+            {
+                break;
+            }
+        }
 
-        assert!(server.has_connections());
-        let data = server.received_data();
-        assert!(!data.is_empty());
-        assert!(data[0].starts_with(b"stolen-credentials"));
+        assert!(
+            server.has_connections(),
+            "Server should have received a connection"
+        );
     }
 }

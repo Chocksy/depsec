@@ -126,7 +126,7 @@ const PATTERN_RULES: &[PatternRule] = &[
         description: "String.fromCharCode with XOR/bitwise operations — deobfuscation routine",
         suggestion: "Legitimate code rarely combines charCodeAt with XOR — this is a strong obfuscation indicator",
         narrative: "Uses String.fromCharCode combined with XOR or bitwise operations to decode hidden strings at runtime. This is the primary obfuscation technique in npm malware like the axios/plain-crypto-js attack.",
-        pattern: r"String\.fromCharCode\s*\(.*[\^]",
+        pattern: r"String\.fromCharCode\s*\(.*[\^+\-]",
         severity: Severity::High,
         confidence: Confidence::Medium,
     },
@@ -280,12 +280,12 @@ impl Check for PatternsCheck {
                     continue;
                 }
 
-                // Skip large files
-                if let Ok(meta) = path.metadata() {
-                    if meta.len() > MAX_FILE_SIZE {
-                        continue;
-                    }
-                }
+                // For large files, sample first+last 50KB instead of skipping entirely.
+                // Attackers can hide malicious code in >500KB bundles to evade scanners.
+                let is_large = path
+                    .metadata()
+                    .map(|m| m.len() > MAX_FILE_SIZE)
+                    .unwrap_or(false);
 
                 // Skip minified JS for entropy check
                 let is_minified = path
@@ -294,9 +294,25 @@ impl Check for PatternsCheck {
                     .map(|n| n.ends_with(".min.js") || n.ends_with(".min.mjs"))
                     .unwrap_or(false);
 
-                let content = match std::fs::read_to_string(path) {
-                    Ok(c) => c,
-                    Err(_) => continue, // Skip unreadable files
+                let content = if is_large {
+                    // Sample first and last 50KB of large files
+                    match std::fs::read(path) {
+                        Ok(bytes) => {
+                            let head_len = 50_000.min(bytes.len());
+                            let tail_start = bytes.len().saturating_sub(50_000);
+                            let mut sample = bytes[..head_len].to_vec();
+                            if tail_start > head_len {
+                                sample.extend_from_slice(&bytes[tail_start..]);
+                            }
+                            String::from_utf8_lossy(&sample).to_string()
+                        }
+                        Err(_) => continue,
+                    }
+                } else {
+                    match std::fs::read_to_string(path) {
+                        Ok(c) => c,
+                        Err(_) => continue,
+                    }
                 };
 
                 scanned_files += 1;
@@ -306,19 +322,43 @@ impl Check for PatternsCheck {
                     .to_string_lossy()
                     .to_string();
 
-                // AST analysis for JS/TS files — handles P001, P008, P013, P014 with High confidence
-                // Parse with tree-sitter if the file mentions dangerous modules, patterns,
-                // or signals that need structural analysis (dynamic require, deobfuscation).
-                let needs_ast = AstAnalyzer::can_analyze(path)
-                    && (content.contains("child_process")
-                        || content.contains("shelljs")
-                        || content.contains("execa")
-                        || content.contains("cross-spawn")
-                        || content.contains("new Function")
-                        || content.contains("require(")   // P013: dynamic require
-                        || content.contains("fromCharCode") // P014: deobfuscation
-                        || content.contains("unlinkSync")  // P015: anti-forensic
-                        || content.contains("rmSync")); // P015: anti-forensic
+                // AST analysis — parse with tree-sitter if the file mentions dangerous
+                // patterns that need structural analysis. Language-aware probes ensure
+                // Python/Ruby AST rules (P020-P033) are triggered, not just JS.
+                let lang = crate::ast::detect_language(path);
+                let needs_ast = lang.is_some()
+                    && match lang {
+                        Some(crate::ast::Lang::JavaScript | crate::ast::Lang::TypeScript) => {
+                            content.contains("child_process")
+                                || content.contains("shelljs")
+                                || content.contains("execa")
+                                || content.contains("cross-spawn")
+                                || content.contains("new Function")
+                                || content.contains("require(")
+                                || content.contains("import(")
+                                || content.contains("fromCharCode")
+                                || content.contains("unlinkSync")
+                                || content.contains("rmSync")
+                        }
+                        Some(crate::ast::Lang::Python) => {
+                            content.contains("subprocess")
+                                || content.contains("os.system")
+                                || content.contains("os.popen")
+                                || content.contains("eval(")
+                                || content.contains("exec(")
+                                || content.contains("__import__")
+                                || content.contains("pickle")
+                        }
+                        Some(crate::ast::Lang::Ruby) => {
+                            content.contains("eval")
+                                || content.contains("system")
+                                || content.contains("exec")
+                                || content.contains("`")
+                                || content.contains("send(")
+                                || content.contains("open(")
+                        }
+                        _ => false,
+                    };
 
                 let ast_handled = if needs_ast {
                     let ast_findings = ast_analyzer.analyze(path, &content);
@@ -329,6 +369,8 @@ impl Check for PatternsCheck {
                             "DEPSEC-P008" => "Expected for template engines — verify template inputs are properly escaped",
                             "DEPSEC-P013" => "Dynamic require() is almost never legitimate in dependencies — this is a strong malware indicator",
                             "DEPSEC-P014" => "Legitimate code rarely combines charCodeAt with XOR — this is a strong obfuscation indicator",
+                            "DEPSEC-P024" => "Never deserialize untrusted pickle data — pickle.loads executes arbitrary code",
+                            "DEPSEC-P034" => "open(\"|\") spawns a shell command — avoid with untrusted input",
                             _ => "Review this dependency for suspicious behavior",
                         };
                         findings.push(
@@ -353,8 +395,9 @@ impl Check for PatternsCheck {
                 // Regex patterns — skip AST-handled rules for JS/TS files
                 for (line_num, line) in content.lines().enumerate() {
                     for (rule, re) in &compiled {
-                        // If AST analyzed this file, skip P001 and P008 (AST handles them)
-                        if ast_handled && is_ast_rule(rule.rule_id) {
+                        // If AST analyzed this JS/TS file, skip P001/P008/P013 (AST handles them).
+                        // For Python/Ruby, the JS-specific AST rules don't apply — regex still runs.
+                        if ast_handled && is_ast_rule(rule.rule_id) && is_js_or_ts(path) {
                             continue;
                         }
 

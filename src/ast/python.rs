@@ -36,6 +36,9 @@ pub fn analyze(parser: &mut Parser, source: &str) -> Vec<AstFinding> {
     // P023: __import__() dynamic imports
     find_dynamic_import(&tree, source_bytes, &mut findings);
 
+    // P024: pickle deserialization (arbitrary code execution)
+    find_pickle_deserialize(&tree, source_bytes, &mut findings);
+
     findings
 }
 
@@ -359,6 +362,53 @@ fn find_dynamic_import(tree: &tree_sitter::Tree, source: &[u8], findings: &mut V
                 ),
                 line,
             });
+        }
+    }
+}
+
+/// P024: pickle.loads / pickle.load / pickle.Unpickler — arbitrary code execution via deserialization
+fn find_pickle_deserialize(
+    tree: &tree_sitter::Tree,
+    source: &[u8],
+    findings: &mut Vec<AstFinding>,
+) {
+    let query = Query::new(
+        &tree.language(),
+        r#"
+        (call
+          function: (attribute
+            object: (identifier) @obj
+            attribute: (identifier) @method)
+          (#eq? @obj "pickle")
+          (#match? @method "^(loads|load|Unpickler)$"))
+        "#,
+    );
+
+    if let Ok(query) = query {
+        let method_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "method")
+            .unwrap();
+
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), source);
+
+        while let Some(m) = matches.next() {
+            if let Some(method_cap) = m.captures.iter().find(|c| c.index as usize == method_idx) {
+                let method_name = method_cap.node.utf8_text(source).unwrap_or("");
+                let line = method_cap.node.start_position().row + 1;
+
+                findings.push(AstFinding {
+                    rule_id: "DEPSEC-P024".into(),
+                    severity: Severity::Critical,
+                    confidence: Confidence::High,
+                    message: format!(
+                        "pickle.{method_name}() — arbitrary code execution via deserialization"
+                    ),
+                    line,
+                });
+            }
         }
     }
 }
