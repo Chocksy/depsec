@@ -255,6 +255,24 @@ pub fn run_install_guard(
                     }
                 }
 
+                let network_summary = NetworkSummary {
+                    expected: observations
+                        .expected
+                        .iter()
+                        .map(|c| format!("{}:{}", c.remote_host, c.remote_port))
+                        .collect(),
+                    unexpected: observations
+                        .unexpected
+                        .iter()
+                        .map(|c| format!("{}:{}", c.remote_host, c.remote_port))
+                        .collect(),
+                    critical: observations
+                        .critical
+                        .iter()
+                        .map(|c| format!("{}:{}", c.remote_host, c.remote_port))
+                        .collect(),
+                };
+
                 return Ok(InstallGuardResult {
                     command: command_str,
                     exit_code: if has_issues {
@@ -265,8 +283,11 @@ pub fn run_install_guard(
                     has_issues,
                     unexpected_connections: observations.unexpected.len(),
                     critical_connections: observations.critical.len(),
-                    file_alerts: observations.file_alerts.len() + canary_accessed.len(),
-                    write_violations: observations.write_violations.len(),
+                    file_alerts: real_file_alerts.len(),
+                    write_violations: real_write_violations.len(),
+                    verdict: Some(verdict),
+                    canary_access: canary_evidence,
+                    network: Some(network_summary),
                 });
             }
             Err(e) => {
@@ -339,6 +360,9 @@ pub fn run_install_guard(
         critical_connections: monitor_result.critical.len(),
         file_alerts: monitor_result.file_alerts.len(),
         write_violations: monitor_result.write_violations.len(),
+        verdict: None,
+        canary_access: vec![],
+        network: None,
     })
 }
 
@@ -363,6 +387,22 @@ pub struct InstallGuardResult {
     pub critical_connections: usize,
     pub file_alerts: usize,
     pub write_violations: usize,
+    /// Kill chain verdict (only set when sandbox path is taken)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<crate::evidence::KillChainVerdict>,
+    /// Canary tokens that were accessed/tampered
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub canary_access: Vec<crate::evidence::CanaryAccess>,
+    /// Network observations from the monitor
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network: Option<NetworkSummary>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct NetworkSummary {
+    pub expected: Vec<String>,
+    pub unexpected: Vec<String>,
+    pub critical: Vec<String>,
 }
 
 /// Detect if the command is a package install (not just any command)
