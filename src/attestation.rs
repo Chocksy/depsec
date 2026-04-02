@@ -374,6 +374,7 @@ mod tests {
             duration_secs: 5.2,
             connections: vec![Connection {
                 remote_host: "registry.npmjs.org".into(),
+                resolved_host: String::new(),
                 remote_port: 443,
                 pid: 1234,
                 process_name: "node".into(),
@@ -381,6 +382,7 @@ mod tests {
             }],
             expected: vec![Connection {
                 remote_host: "registry.npmjs.org".into(),
+                resolved_host: String::new(),
                 remote_port: 443,
                 pid: 1234,
                 process_name: "node".into(),

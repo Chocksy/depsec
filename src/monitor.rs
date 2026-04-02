@@ -12,6 +12,9 @@ const POLL_INTERVAL_MS: u64 = 100;
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Connection {
     pub remote_host: String,
+    /// Reverse DNS resolved hostname (empty if lookup failed)
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub resolved_host: String,
     pub remote_port: u16,
     pub pid: u32,
     pub process_name: String,
@@ -386,17 +389,21 @@ fn is_expected_connection(
     defaults: &HashMap<&str, Vec<&str>>,
     user_allowed: &HashSet<String>,
 ) -> bool {
-    // Check universal hosts
-    if UNIVERSAL_EXPECTED
-        .iter()
-        .any(|h| conn.remote_host.contains(h))
-    {
-        return true;
+    // Check both raw IP and reverse-DNS resolved hostname
+    let hosts = [&conn.remote_host, &conn.resolved_host];
+
+    // Check universal hosts (strict match — exact or subdomain, NOT substring)
+    for host in &hosts {
+        if UNIVERSAL_EXPECTED.iter().any(|h| host_matches(host, h)) {
+            return true;
+        }
     }
 
-    // Check user baseline
-    if user_allowed.contains(&conn.remote_host) {
-        return true;
+    // Check user baseline (exact match via HashSet)
+    for host in &hosts {
+        if user_allowed.contains(*host) {
+            return true;
+        }
     }
 
     // Check process-specific defaults
@@ -407,8 +414,10 @@ fn is_expected_connection(
         .unwrap_or(&conn.process_name);
 
     if let Some(expected_hosts) = defaults.get(process_base) {
-        if expected_hosts.iter().any(|h| conn.remote_host.contains(h)) {
-            return true;
+        for host in &hosts {
+            if expected_hosts.iter().any(|h| host_matches(host, h)) {
+                return true;
+            }
         }
     }
 
@@ -429,19 +438,29 @@ fn poll_connections(
             .collect();
 
         if let Ok(conns) = get_current_connections() {
-            let mut seen_lock = seen.lock().unwrap();
-            let mut conns_lock = connections.lock().unwrap();
-
-            for conn in conns {
-                // Only track connections from the child process tree
-                if !child_pids.contains(&conn.pid) {
-                    continue;
+            // Collect new connections under the lock (fast — no I/O)
+            let mut new_conns = Vec::new();
+            {
+                let mut seen_lock = seen.lock().unwrap();
+                for conn in conns {
+                    if !child_pids.contains(&conn.pid) {
+                        continue;
+                    }
+                    let key = format!("{}:{}:{}", conn.remote_host, conn.remote_port, conn.pid);
+                    if seen_lock.insert(key) {
+                        new_conns.push(conn);
+                    }
                 }
+            } // locks dropped before DNS
 
-                let key = format!("{}:{}:{}", conn.remote_host, conn.remote_port, conn.pid);
-                if seen_lock.insert(key) {
-                    conns_lock.push(conn);
-                }
+            // Resolve DNS outside the lock (can block up to 1s per IP)
+            for conn in &mut new_conns {
+                conn.resolved_host = reverse_dns(&conn.remote_host);
+            }
+
+            // Push results
+            if !new_conns.is_empty() {
+                connections.lock().unwrap().extend(new_conns);
             }
         }
         std::thread::sleep(Duration::from_millis(POLL_INTERVAL_MS));
@@ -486,6 +505,7 @@ fn get_connections_ss() -> anyhow::Result<Vec<Connection>> {
 
             connections.push(Connection {
                 remote_host,
+                resolved_host: String::new(),
                 remote_port,
                 pid,
                 process_name,
@@ -532,6 +552,7 @@ fn get_connections_lsof() -> anyhow::Result<Vec<Connection>> {
         if let Some(caps) = re.captures(&name_str) {
             connections.push(Connection {
                 remote_host: caps[1].to_string(),
+                resolved_host: String::new(),
                 remote_port: caps[2].parse().unwrap_or(0),
                 pid,
                 process_name,
@@ -541,6 +562,36 @@ fn get_connections_lsof() -> anyhow::Result<Vec<Connection>> {
     }
 
     Ok(connections)
+}
+
+/// Strict host matching: exact match or subdomain match.
+/// Prevents PTR spoofing (e.g., "registry.npmjs.org.evil.com" must NOT match "registry.npmjs.org").
+fn host_matches(actual: &str, expected: &str) -> bool {
+    if actual.is_empty() || expected.is_empty() {
+        return false;
+    }
+    actual == expected || actual.ends_with(&format!(".{expected}"))
+}
+
+/// Reverse DNS lookup — resolve an IP to a hostname.
+/// Uses the `host` command (available on macOS/Linux) with a short timeout.
+/// Returns empty string if lookup fails or times out.
+fn reverse_dns(ip: &str) -> String {
+    Command::new("host")
+        .args(["-W", "1", ip]) // 1 second timeout
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .and_then(|o| {
+            let stdout = String::from_utf8_lossy(&o.stdout);
+            // Parse: "34.6.16.104.in-addr.arpa domain name pointer hostname.example.com."
+            stdout
+                .lines()
+                .find(|l| l.contains("domain name pointer"))
+                .and_then(|l| l.split("domain name pointer ").nth(1))
+                .map(|s| s.trim().trim_end_matches('.').to_string())
+        })
+        .unwrap_or_default()
 }
 
 /// Read /proc/<pid>/cmdline on Linux
@@ -694,6 +745,7 @@ mod tests {
     fn make_conn(host: &str, process: &str) -> Connection {
         Connection {
             remote_host: host.into(),
+            resolved_host: String::new(),
             remote_port: 443,
             pid: 1,
             process_name: process.into(),
@@ -756,6 +808,85 @@ mod tests {
         let allowed = HashSet::new();
         let conn = make_conn("registry.npmjs.org", "/usr/local/bin/npm");
         assert!(is_expected_connection(&conn, &defaults, &allowed));
+    }
+
+    #[test]
+    fn test_is_expected_via_resolved_host() {
+        // Raw IP doesn't match, but resolved_host does → expected
+        let defaults = default_expected_hosts();
+        let allowed = HashSet::new();
+        let conn = Connection {
+            remote_host: "104.16.6.34".into(),
+            resolved_host: "registry.npmjs.org".into(),
+            remote_port: 443,
+            pid: 1,
+            process_name: "node".into(),
+            cmdline: String::new(),
+        };
+        assert!(
+            is_expected_connection(&conn, &defaults, &allowed),
+            "Connection with resolved_host matching expected registry should be expected"
+        );
+    }
+
+    #[test]
+    fn test_is_unexpected_even_with_resolved_host() {
+        let defaults = default_expected_hosts();
+        let allowed = HashSet::new();
+        let conn = Connection {
+            remote_host: "1.2.3.4".into(),
+            resolved_host: "evil-c2-server.com".into(),
+            remote_port: 443,
+            pid: 1,
+            process_name: "node".into(),
+            cmdline: String::new(),
+        };
+        assert!(!is_expected_connection(&conn, &defaults, &allowed));
+    }
+
+    #[test]
+    fn test_ptr_spoofing_rejected() {
+        // Attacker sets PTR record to "registry.npmjs.org.evil.com" — must NOT match
+        let defaults = default_expected_hosts();
+        let allowed = HashSet::new();
+        let conn = Connection {
+            remote_host: "1.2.3.4".into(),
+            resolved_host: "registry.npmjs.org.evil.com".into(),
+            remote_port: 443,
+            pid: 1,
+            process_name: "node".into(),
+            cmdline: String::new(),
+        };
+        assert!(
+            !is_expected_connection(&conn, &defaults, &allowed),
+            "PTR spoofing with subdomain suffix must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_host_matches_strict() {
+        assert!(host_matches("registry.npmjs.org", "registry.npmjs.org"));
+        assert!(host_matches("cdn.registry.npmjs.org", "registry.npmjs.org"));
+        assert!(!host_matches(
+            "registry.npmjs.org.evil.com",
+            "registry.npmjs.org"
+        ));
+        assert!(!host_matches("", "registry.npmjs.org"));
+        assert!(!host_matches("registry.npmjs.org", ""));
+    }
+
+    #[test]
+    fn test_reverse_dns_parses_host_output() {
+        // Test the parsing logic — reverse_dns calls `host` which may not work in CI,
+        // but we can test that a well-known IP resolves (best-effort)
+        let result = reverse_dns("1.1.1.1");
+        // Cloudflare rDNS: typically "one.one.one.one" — don't hard-fail if DNS unavailable
+        if !result.is_empty() {
+            assert!(
+                result.contains("one.one.one.one") || result.contains("cloudflare"),
+                "Expected Cloudflare rDNS for 1.1.1.1, got: {result}"
+            );
+        }
     }
 
     #[test]

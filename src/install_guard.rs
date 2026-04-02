@@ -195,8 +195,10 @@ pub fn run_install_guard(
                         crate::evidence::KillChainVerdict::Pass if !has_issues => {
                             eprintln!("\x1b[32m✓\x1b[0m depsec: install clean");
                         }
-                        crate::evidence::KillChainVerdict::Info { reason } if !has_issues => {
-                            eprintln!("\x1b[32m✓\x1b[0m depsec: install clean — {reason}");
+                        crate::evidence::KillChainVerdict::Info { .. } if !has_issues => {
+                            // Info details (e.g. unexpected connections) suppressed in default output.
+                            // Available via --json. Definitive output only.
+                            eprintln!("\x1b[32m✓\x1b[0m depsec: install clean");
                         }
                         crate::evidence::KillChainVerdict::Pass
                         | crate::evidence::KillChainVerdict::Info { .. } => {

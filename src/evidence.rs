@@ -92,6 +92,7 @@ mod tests {
     fn make_conn(host: &str, port: u16) -> Connection {
         Connection {
             remote_host: host.into(),
+            resolved_host: String::new(),
             remote_port: port,
             pid: 1,
             process_name: "node".into(),
