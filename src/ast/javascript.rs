@@ -47,6 +47,9 @@ pub fn analyze(parser: &mut Parser, source: &str) -> Vec<AstFinding> {
     // P014: Find dense String.fromCharCode usage (deobfuscation routines)
     find_deobfuscation_patterns(&tree, source_bytes, &mut findings);
 
+    // Detect Reflect.apply/construct with dangerous function arguments
+    find_dangerous_reflect(&tree, source_bytes, &mut findings);
+
     findings
 }
 
@@ -833,6 +836,70 @@ fn find_deobfuscation_patterns(
                     locations.len()
                 ),
                 line: first_line,
+            });
+        }
+    }
+}
+
+/// Detect Reflect.apply(fn, ...) and Reflect.construct(fn, ...) where fn is dangerous
+/// E.g., Reflect.apply(fs.readFileSync, fs, ['/home/user/.ssh/id_rsa'])
+fn find_dangerous_reflect(tree: &tree_sitter::Tree, source: &[u8], findings: &mut Vec<AstFinding>) {
+    let query = Query::new(
+        &tree.language(),
+        r#"
+        (call_expression
+          function: (member_expression
+            object: (identifier) @obj
+            property: (property_identifier) @method)
+          arguments: (arguments . (_) @first_arg)
+          (#eq? @obj "Reflect")
+          (#match? @method "^(apply|construct)$"))
+        "#,
+    );
+
+    if let Ok(query) = query {
+        let method_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "method")
+            .unwrap();
+        let arg_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "first_arg")
+            .unwrap();
+
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), source);
+
+        while let Some(m) = matches.next() {
+            let method_cap = m.captures.iter().find(|c| c.index as usize == method_idx);
+            let arg_cap = m.captures.iter().find(|c| c.index as usize == arg_idx);
+            let (Some(method_cap), Some(arg_cap)) = (method_cap, arg_cap) else {
+                continue;
+            };
+
+            // Check if the first argument references dangerous functions
+            let arg_text = arg_cap.node.utf8_text(source).unwrap_or("");
+            let is_dangerous = arg_text.contains("readFileSync")
+                || arg_text.contains("readFile")
+                || arg_text.contains("exec")
+                || arg_text.contains("spawn")
+                || arg_text.contains("writeFile");
+
+            if !is_dangerous {
+                continue;
+            }
+
+            let method_text = method_cap.node.utf8_text(source).unwrap_or("");
+            let line = method_cap.node.start_position().row + 1;
+
+            findings.push(AstFinding {
+                rule_id: "DEPSEC-P001".into(),
+                severity: Severity::High,
+                confidence: Confidence::High,
+                message: format!("Reflect.{method_text}() with dangerous function: {arg_text}"),
+                line,
             });
         }
     }

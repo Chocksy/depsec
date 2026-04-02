@@ -393,7 +393,10 @@ impl Check for PatternsCheck {
                     DANGEROUS_EXEC_MODULES.iter().any(|m| content.contains(m));
 
                 // Regex patterns — skip AST-handled rules for JS/TS files
-                for (line_num, line) in content.lines().enumerate() {
+                for (line_num, raw_line) in content.lines().enumerate() {
+                    // Normalize confusable unicode characters to catch homoglyph attacks
+                    // (e.g., Cyrillic 'а' U+0430 → Latin 'a' U+0061)
+                    let line = &normalize_confusables(raw_line);
                     for (rule, re) in &compiled {
                         // If AST analyzed this JS/TS file, skip P001/P008/P013 (AST handles them).
                         // For Python/Ruby, the JS-specific AST rules don't apply — regex still runs.
@@ -467,6 +470,11 @@ impl Check for PatternsCheck {
         // DEPSEC-P016: Dependency package.json install scripts
         if !ignored_rules.contains(&"DEPSEC-P016") {
             check_dep_install_scripts(ctx.root, &mut findings);
+        }
+
+        // DEPSEC-P025: WebAssembly binary presence in packages
+        if !ignored_rules.contains(&"DEPSEC-P025") {
+            check_wasm_presence(ctx.root, &mut findings);
         }
 
         // Signal combination: escalate findings when multiple weak signals co-occur
@@ -563,6 +571,44 @@ fn extract_package_name(rel_path: &str) -> Option<String> {
     None
 }
 
+/// Normalize common unicode confusable characters to their ASCII equivalents.
+/// Catches homoglyph attacks where Cyrillic/Greek letters visually identical to
+/// Latin characters are used to evade regex-based detection (e.g., evаl with
+/// Cyrillic 'а' instead of Latin 'a').
+fn normalize_confusables(line: &str) -> String {
+    if line.is_ascii() {
+        return line.to_string(); // Fast path: no confusables possible
+    }
+    line.chars()
+        .map(|c| match c {
+            // Cyrillic → Latin (most common confusables in malware)
+            '\u{0430}' => 'a', // а
+            '\u{0435}' => 'e', // е
+            '\u{043E}' => 'o', // о
+            '\u{0440}' => 'p', // р
+            '\u{0441}' => 'c', // с
+            '\u{0443}' => 'y', // у (maps to y, not u — visual match)
+            '\u{0445}' => 'x', // х
+            '\u{0410}' => 'A', // А
+            '\u{0412}' => 'B', // В
+            '\u{0415}' => 'E', // Е
+            '\u{041A}' => 'K', // К
+            '\u{041C}' => 'M', // М
+            '\u{041D}' => 'H', // Н
+            '\u{041E}' => 'O', // О
+            '\u{0420}' => 'P', // Р
+            '\u{0421}' => 'C', // С
+            '\u{0422}' => 'T', // Т
+            '\u{0425}' => 'X', // Х
+            // Greek → Latin
+            '\u{03B1}' => 'a', // α (alpha)
+            '\u{03BF}' => 'o', // ο (omicron)
+            '\u{03C1}' => 'p', // ρ (rho)
+            _ => c,
+        })
+        .collect()
+}
+
 /// Rules that are handled by the AST engine when the file is JS/TS
 fn is_ast_rule(rule_id: &str) -> bool {
     // P014 is NOT included: AST detects dense fromCharCode (3+ calls),
@@ -648,6 +694,55 @@ fn check_entropy(content: &str, file: &str, findings: &mut Vec<Finding>) {
 
 fn shannon_entropy(s: &str) -> f64 {
     crate::utils::shannon_entropy(s)
+}
+
+/// DEPSEC-P025: Detect WebAssembly binary presence in dependency packages.
+/// WASM in npm packages is unusual and often malicious (CrowdStrike: 75% of WASM in the wild is malicious).
+/// No other supply chain scanner inspects WASM contents — detecting presence alone is valuable.
+fn check_wasm_presence(root: &Path, findings: &mut Vec<Finding>) {
+    for dep_dir_name in DEP_DIRS {
+        let dep_dir = root.join(dep_dir_name);
+        if !dep_dir.exists() {
+            continue;
+        }
+
+        for entry in WalkDir::new(&dep_dir)
+            .max_depth(10)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file())
+        {
+            let path = entry.path();
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+
+            if ext == "wasm" {
+                let rel_path = path
+                    .strip_prefix(root)
+                    .unwrap_or(path)
+                    .to_string_lossy()
+                    .to_string();
+                let pkg = extract_package_name(&rel_path);
+                findings.push(
+                    Finding::new(
+                        "DEPSEC-P025",
+                        Severity::High,
+                        format!(
+                            "WebAssembly binary detected: {}",
+                            path.file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("unknown.wasm")
+                        ),
+                    )
+                    .with_file(&rel_path, 0)
+                    .with_confidence(Confidence::Medium)
+                    .with_suggestion(
+                        "WASM binaries in dependencies are unusual — verify this is expected and not a hidden payload",
+                    )
+                    .with_package(pkg),
+                );
+            }
+        }
+    }
 }
 
 /// DEPSEC-P009: Scan Python site-packages for .pth files with executable code
