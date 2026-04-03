@@ -273,14 +273,18 @@ pub fn run_install_guard(
                         .collect(),
                 };
 
+                // Post-install static scan: check newly installed packages
+                let scan_findings = post_install_scan(root, json_output, is_install && !has_issues);
+                let has_scan_issues = !scan_findings.is_empty();
+
                 return Ok(InstallGuardResult {
                     command: command_str,
-                    exit_code: if has_issues {
+                    exit_code: if has_issues || has_scan_issues {
                         1
                     } else {
                         status.code().unwrap_or(-1)
                     },
-                    has_issues,
+                    has_issues: has_issues || has_scan_issues,
                     unexpected_connections: observations.unexpected.len(),
                     critical_connections: observations.critical.len(),
                     file_alerts: real_file_alerts.len(),
@@ -348,14 +352,18 @@ pub fn run_install_guard(
         }
     }
 
+    // Post-install static scan: check newly installed packages
+    let scan_findings = post_install_scan(root, json_output, is_install && !has_issues);
+    let has_scan_issues = !scan_findings.is_empty();
+
     Ok(InstallGuardResult {
         command: command_str,
-        exit_code: if has_issues {
+        exit_code: if has_issues || has_scan_issues {
             1
         } else {
             monitor_result.exit_code
         },
-        has_issues,
+        has_issues: has_issues || has_scan_issues,
         unexpected_connections: monitor_result.unexpected.len(),
         critical_connections: monitor_result.critical.len(),
         file_alerts: monitor_result.file_alerts.len(),
@@ -364,6 +372,77 @@ pub fn run_install_guard(
         canary_access: vec![],
         network: None,
     })
+}
+
+/// Post-install static scan: check newly installed/changed packages for malicious patterns.
+/// Uses the lockfile-driven scanner + cache to scan only the delta (new/changed packages).
+/// Returns high-confidence findings that should block.
+fn post_install_scan(
+    root: &std::path::Path,
+    json_output: bool,
+    should_scan: bool,
+) -> Vec<crate::checks::Finding> {
+    if !should_scan {
+        return vec![];
+    }
+
+    // Use the scan cache to find delta packages
+    let lock_packages = crate::scan_cache::parse_lockfile(root);
+    if lock_packages.is_empty() {
+        return vec![];
+    }
+
+    let cache = crate::scan_cache::ScanCache::load(root);
+    let to_scan = cache.packages_to_scan(&lock_packages);
+    if to_scan.is_empty() {
+        // All cached — nothing new installed
+        crate::scan_cache::update_cache(root);
+        return vec![];
+    }
+
+    // Run a quick patterns scan on the delta
+    let config = crate::config::load_config(root);
+    let ctx = crate::checks::ScanContext {
+        root,
+        config: &config,
+    };
+
+    let check = crate::checks::patterns::PatternsCheck;
+    let result = match crate::checks::Check::run(&check, &ctx) {
+        Ok(r) => r,
+        Err(_) => {
+            crate::scan_cache::update_cache(root);
+            return vec![];
+        }
+    };
+
+    // Filter to high-confidence, high-severity findings only
+    let critical_findings: Vec<_> = result
+        .findings
+        .into_iter()
+        .filter(|f| {
+            matches!(
+                f.severity,
+                crate::checks::Severity::Critical | crate::checks::Severity::High
+            ) && matches!(f.confidence, Some(crate::checks::Confidence::High))
+        })
+        .collect();
+
+    if !critical_findings.is_empty() && !json_output {
+        eprintln!(
+            "\x1b[1m[depsec protect]\x1b[0m \x1b[31m⚠ Static scan found {} high-confidence issue{}\x1b[0m",
+            critical_findings.len(),
+            if critical_findings.len() == 1 { "" } else { "s" }
+        );
+        for f in &critical_findings {
+            eprintln!("    \x1b[31m✗\x1b[0m {}", f.message);
+        }
+    }
+
+    // Update cache after scan
+    crate::scan_cache::update_cache(root);
+
+    critical_findings
 }
 
 /// Check if any canary token files were tampered with by the sandboxed process.

@@ -39,7 +39,7 @@ const PATTERN_RULES: &[PatternRule] = &[
         narrative: "Decodes base64/atob data and passes it to eval, exec, or Function. This is the #1 obfuscation pattern in npm malware. Legitimate uses are rare.",
         pattern: r#"(?i)(atob|base64[._\-]?decode|Buffer\.from\([^)]+,\s*['"]base64['"]).*\b(eval|exec|Function|spawn|child_process|require)\b"#,
         severity: Severity::Critical,
-        confidence: Confidence::Medium,
+        confidence: Confidence::High, // Same-line decode→exec is the #1 malware pattern
     },
     PatternRule {
         rule_id: "DEPSEC-P003",

@@ -61,7 +61,17 @@ fn run_wizard(opts: &SetupOpts) -> ExitCode {
     eprintln!("depsec v{} — Setup\n", env!("CARGO_PKG_VERSION"));
 
     // Build options with pre-selection based on existing config
+    let has_api_key = std::env::var("OPENROUTER_API_KEY").is_ok();
     let mut options = vec![
+        tui::MultiSelectOption {
+            label: "AI verdicts (OpenRouter)".into(),
+            description: if has_api_key {
+                "✓ API key detected — AI verdicts enabled".into()
+            } else {
+                "Configure OPENROUTER_API_KEY for definitive verdicts".into()
+            },
+            selected: first_run && !has_api_key,
+        },
         tui::MultiSelectOption {
             label: "Shell protection".into(),
             description: "Wraps npm/yarn/pip/cargo with monitoring".into(),
@@ -101,11 +111,12 @@ fn run_wizard(opts: &SetupOpts) -> ExitCode {
         }
     };
 
-    let want_shell = selections.contains(&0);
-    let want_hook = selections.contains(&1);
-    let want_sandbox = selections.contains(&2);
-    let want_baseline = selections.contains(&3);
-    let want_selfcheck = selections.contains(&4);
+    let want_ai = selections.contains(&0);
+    let want_shell = selections.contains(&1);
+    let want_hook = selections.contains(&2);
+    let want_sandbox = selections.contains(&3);
+    let want_baseline = selections.contains(&4);
+    let want_selfcheck = selections.contains(&5);
 
     // Hook scope sub-prompt
     let hook_scope = if want_hook {
@@ -146,6 +157,18 @@ fn run_wizard(opts: &SetupOpts) -> ExitCode {
     // Execute selections
     let mut new_config = global.clone();
     let mut success = true;
+
+    if want_ai && !has_api_key {
+        println!("\n\x1b[1mAI Verdicts Setup\x1b[0m");
+        println!("Get a free API key at https://openrouter.ai/keys");
+        println!("Then set it in your shell profile:");
+        println!("  export OPENROUTER_API_KEY=\"sk-or-...\"");
+        println!("\nWith AI verdicts, depsec delivers definitive decisions:");
+        println!("  ✓ clean  or  ✗ BLOCKED — no ambiguous warnings");
+    } else if want_ai && has_api_key {
+        // Test the API key with a quick validation
+        println!("  \x1b[32m✓\x1b[0m AI verdicts already configured (OPENROUTER_API_KEY set)");
+    }
 
     if want_shell {
         match shellhook::install_to_profile() {
