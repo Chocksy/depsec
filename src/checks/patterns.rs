@@ -394,9 +394,11 @@ impl Check for PatternsCheck {
 
                 // Regex patterns — skip AST-handled rules for JS/TS files
                 for (line_num, raw_line) in content.lines().enumerate() {
-                    // Normalize confusable unicode characters to catch homoglyph attacks
-                    // (e.g., Cyrillic 'а' U+0430 → Latin 'a' U+0061)
-                    let line = &normalize_confusables(raw_line);
+                    // Pre-process line for evasion resistance:
+                    // 1. Normalize confusable unicode (Cyrillic → Latin)
+                    // 2. Resolve string concatenation ("read" + "File" → "readFile")
+                    let normalized = normalize_confusables(raw_line);
+                    let line = &resolve_string_concat(&normalized);
                     for (rule, re) in &compiled {
                         // If AST analyzed this JS/TS file, skip P001/P008/P013 (AST handles them).
                         // For Python/Ruby, the JS-specific AST rules don't apply — regex still runs.
@@ -607,6 +609,28 @@ fn normalize_confusables(line: &str) -> String {
             _ => c,
         })
         .collect()
+}
+
+/// Resolve obvious string concatenation in a line.
+/// Collapses `"a" + "b"` and `'a' + 'b'` into `"ab"` / `'ab'` so regex patterns
+/// can match the assembled string. Catches evasion techniques like:
+/// - `fs["read" + "File" + "Sync"]` → `fs["readFileSync"]`
+/// - `globalThis["ev" + "al"]` → `globalThis["eval"]`
+fn resolve_string_concat(line: &str) -> String {
+    if !line.contains("\" + \"") && !line.contains("' + '") {
+        return line.to_string(); // Fast path: no string concatenation
+    }
+
+    // Replace "X" + "Y" → "XY" (double quotes)
+    let mut result = line.to_string();
+    while result.contains("\" + \"") {
+        result = result.replace("\" + \"", "");
+    }
+    // Replace 'X' + 'Y' → 'XY' (single quotes)
+    while result.contains("' + '") {
+        result = result.replace("' + '", "");
+    }
+    result
 }
 
 /// Rules that are handled by the AST engine when the file is JS/TS

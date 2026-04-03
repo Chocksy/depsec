@@ -179,6 +179,154 @@ fn find_dangerous_imports(tree: &tree_sitter::Tree, source: &[u8]) -> HashSet<St
         }
     }
 
+    // Query: global.require('child_process') / globalThis.require('child_process')
+    // E03: attacker aliases require via global object to bypass import tracking
+    let global_require_query = Query::new(
+        &tree.language(),
+        r#"
+        (call_expression
+          function: (member_expression
+            object: (identifier) @obj
+            property: (property_identifier) @req)
+          arguments: (arguments
+            (string (string_fragment) @module))
+          (#match? @obj "^(global|globalThis|window)$")
+          (#eq? @req "require"))
+        "#,
+    );
+
+    if let Ok(query) = global_require_query {
+        let module_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "module")
+            .unwrap();
+
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), source);
+
+        while let Some(m) = matches.next() {
+            if let Some(cap) = m.captures.iter().find(|c| c.index as usize == module_idx) {
+                let module_name = cap.node.utf8_text(source).unwrap_or("");
+                if DANGEROUS_MODULES.contains(&module_name) {
+                    let mut node = cap.node;
+                    while let Some(parent) = node.parent() {
+                        if parent.kind() == "variable_declarator" {
+                            if let Some(name_node) = parent.child_by_field_name("name") {
+                                if name_node.kind() == "identifier" {
+                                    if let Ok(name) = name_node.utf8_text(source) {
+                                        aliases.insert(name.to_string());
+                                    }
+                                }
+                            }
+                            break;
+                        }
+                        node = parent;
+                    }
+                }
+            }
+        }
+    }
+
+    // Also detect: const r = global.require; r('child_process') — alias for require itself
+    // If someone assigns global.require to a variable, track that variable as an alias
+    // and when called with a dangerous module, add the result to aliases
+    let require_alias_query = Query::new(
+        &tree.language(),
+        r#"
+        (variable_declarator
+          name: (identifier) @alias
+          value: (member_expression
+            object: (identifier) @obj
+            property: (property_identifier) @prop)
+          (#match? @obj "^(global|globalThis|module)$")
+          (#eq? @prop "require"))
+        "#,
+    );
+
+    let mut require_aliases: HashSet<String> = HashSet::new();
+    if let Ok(query) = require_alias_query {
+        let alias_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "alias")
+            .unwrap();
+
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), source);
+
+        while let Some(m) = matches.next() {
+            if let Some(cap) = m.captures.iter().find(|c| c.index as usize == alias_idx) {
+                if let Ok(name) = cap.node.utf8_text(source) {
+                    require_aliases.insert(name.to_string());
+                }
+            }
+        }
+    }
+
+    // Now find calls like r('child_process') where r is a require alias
+    if !require_aliases.is_empty() {
+        let call_query = Query::new(
+            &tree.language(),
+            r#"
+            (call_expression
+              function: (identifier) @fn
+              arguments: (arguments
+                (string (string_fragment) @module)))
+            "#,
+        );
+
+        if let Ok(query) = call_query {
+            let fn_idx = query
+                .capture_names()
+                .iter()
+                .position(|n| *n == "fn")
+                .unwrap();
+            let module_idx = query
+                .capture_names()
+                .iter()
+                .position(|n| *n == "module")
+                .unwrap();
+
+            let mut cursor = QueryCursor::new();
+            let mut matches = cursor.matches(&query, tree.root_node(), source);
+
+            while let Some(m) = matches.next() {
+                let fn_cap = m.captures.iter().find(|c| c.index as usize == fn_idx);
+                let mod_cap = m.captures.iter().find(|c| c.index as usize == module_idx);
+                let (Some(fn_cap), Some(mod_cap)) = (fn_cap, mod_cap) else {
+                    continue;
+                };
+
+                let fn_name = fn_cap.node.utf8_text(source).unwrap_or("");
+                if !require_aliases.contains(fn_name) {
+                    continue;
+                }
+
+                let module_name = mod_cap.node.utf8_text(source).unwrap_or("");
+                if !DANGEROUS_MODULES.contains(&module_name) {
+                    continue;
+                }
+
+                // The call r('child_process') returns the module — track the assigned variable
+                let mut node = fn_cap.node;
+                while let Some(parent) = node.parent() {
+                    if parent.kind() == "variable_declarator" {
+                        if let Some(name_node) = parent.child_by_field_name("name") {
+                            if name_node.kind() == "identifier" {
+                                if let Ok(name) = name_node.utf8_text(source) {
+                                    aliases.insert(name.to_string());
+                                }
+                            }
+                        }
+                        break;
+                    }
+                    node = parent;
+                }
+            }
+        }
+    }
+
     // Query: import { exec } from 'child_process'
     // Also: import cp from 'child_process'
     let import_query = Query::new(
