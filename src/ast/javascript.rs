@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use streaming_iterator::StreamingIterator;
 use tree_sitter::{Parser, Query, QueryCursor};
@@ -49,6 +49,13 @@ pub fn analyze(parser: &mut Parser, source: &str) -> Vec<AstFinding> {
 
     // Detect Reflect.apply/construct with dangerous function arguments
     find_dangerous_reflect(&tree, source_bytes, &mut findings);
+
+    // Const propagation: resolve cross-line string assignments and detect
+    // bracket-access calls like obj[variable]() where variable resolves to a dangerous name
+    let const_table = build_const_table(&tree, source_bytes);
+    if !const_table.is_empty() {
+        find_const_propagated_dangers(&tree, source_bytes, &const_table, &mut findings);
+    }
 
     findings
 }
@@ -1120,6 +1127,254 @@ fn find_dangerous_reflect(tree: &tree_sitter::Tree, source: &[u8], findings: &mu
                 severity: Severity::High,
                 confidence: Confidence::High,
                 message: format!("Reflect.{method_text}() with dangerous function: {arg_text}"),
+                line,
+            });
+        }
+    }
+}
+
+/// Build a const/let/var symbol table: maps variable names to resolved string values.
+/// Handles: `const x = "foo" + "bar"` → x = "foobar"
+/// Handles: `const x = "eval"` → x = "eval"
+fn build_const_table(tree: &tree_sitter::Tree, source: &[u8]) -> HashMap<String, String> {
+    let mut table = HashMap::new();
+
+    // Query: const/let/var declarations with string or binary_expression RHS
+    let decl_query = Query::new(
+        &tree.language(),
+        r#"
+        (variable_declarator
+          name: (identifier) @name
+          value: (_) @value)
+        "#,
+    );
+
+    let Ok(query) = decl_query else {
+        return table;
+    };
+
+    let name_idx = query
+        .capture_names()
+        .iter()
+        .position(|n| *n == "name")
+        .unwrap();
+    let value_idx = query
+        .capture_names()
+        .iter()
+        .position(|n| *n == "value")
+        .unwrap();
+
+    let mut cursor = QueryCursor::new();
+    let mut matches = cursor.matches(&query, tree.root_node(), source);
+
+    while let Some(m) = matches.next() {
+        let name_cap = m.captures.iter().find(|c| c.index as usize == name_idx);
+        let value_cap = m.captures.iter().find(|c| c.index as usize == value_idx);
+        let (Some(name_cap), Some(value_cap)) = (name_cap, value_cap) else {
+            continue;
+        };
+
+        let var_name = name_cap.node.utf8_text(source).unwrap_or("");
+        if var_name.is_empty() {
+            continue;
+        }
+
+        // Try to resolve the RHS to a string literal
+        if let Some(resolved) = resolve_node_to_string(&value_cap.node, source) {
+            table.insert(var_name.to_string(), resolved);
+        }
+    }
+
+    table
+}
+
+/// Resolve a tree-sitter node to a string value (if possible).
+/// Handles: string literals, binary_expression with + operator on strings,
+/// and single-level variable references to the const table.
+fn resolve_node_to_string(node: &tree_sitter::Node, source: &[u8]) -> Option<String> {
+    match node.kind() {
+        "string" => {
+            // "foo" → extract the string_fragment child
+            let mut child_cursor = node.walk();
+            for child in node.children(&mut child_cursor) {
+                if child.kind() == "string_fragment" {
+                    return child.utf8_text(source).ok().map(|s| s.to_string());
+                }
+            }
+            None
+        }
+        "binary_expression" => {
+            // "foo" + "bar" → concatenate left and right
+            let left = node.child_by_field_name("left")?;
+            let op = node.child_by_field_name("operator")?;
+            let right = node.child_by_field_name("right")?;
+
+            if op.utf8_text(source).ok()? != "+" {
+                return None;
+            }
+
+            let left_val = resolve_node_to_string(&left, source)?;
+            let right_val = resolve_node_to_string(&right, source)?;
+            Some(format!("{left_val}{right_val}"))
+        }
+        "template_string" => {
+            // `foo` (no interpolation) → extract as literal
+            let text = node.utf8_text(source).ok()?;
+            let inner = text.strip_prefix('`')?.strip_suffix('`')?;
+            if inner.contains("${") {
+                return None; // Has interpolation — can't resolve statically
+            }
+            Some(inner.to_string())
+        }
+        _ => None,
+    }
+}
+
+/// Dangerous identifiers/method names that const propagation should flag
+const DANGEROUS_RESOLVED_NAMES: &[&str] = &[
+    "eval",
+    "exec",
+    "execSync",
+    "spawn",
+    "spawnSync",
+    "execFile",
+    "execFileSync",
+    "readFileSync",
+    "readFile",
+    "writeFileSync",
+    "writeFile",
+    "Function",
+];
+
+/// Detect bracket-access calls where the key resolves to a dangerous name.
+/// E.g., `const m = "readFileSync"; fs[m](path)` or `globalThis[fn_name](code)`
+fn find_const_propagated_dangers(
+    tree: &tree_sitter::Tree,
+    source: &[u8],
+    const_table: &HashMap<String, String>,
+    findings: &mut Vec<AstFinding>,
+) {
+    // Query: obj[key](...) — subscript_expression as call function
+    let bracket_call_query = Query::new(
+        &tree.language(),
+        r#"
+        (call_expression
+          function: (subscript_expression
+            object: (_) @obj
+            index: (identifier) @key))
+        "#,
+    );
+
+    if let Ok(query) = bracket_call_query {
+        let obj_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "obj")
+            .unwrap();
+        let key_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "key")
+            .unwrap();
+
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), source);
+
+        while let Some(m) = matches.next() {
+            let obj_cap = m.captures.iter().find(|c| c.index as usize == obj_idx);
+            let key_cap = m.captures.iter().find(|c| c.index as usize == key_idx);
+            let (Some(obj_cap), Some(key_cap)) = (obj_cap, key_cap) else {
+                continue;
+            };
+
+            let key_name = key_cap.node.utf8_text(source).unwrap_or("");
+            let resolved = match const_table.get(key_name) {
+                Some(v) => v.as_str(),
+                None => continue,
+            };
+
+            if !DANGEROUS_RESOLVED_NAMES.contains(&resolved) {
+                continue;
+            }
+
+            let obj_text = obj_cap.node.utf8_text(source).unwrap_or("<expr>");
+            let line = obj_cap.node.start_position().row + 1;
+
+            let severity = if resolved == "eval"
+                || resolved == "Function"
+                || resolved.starts_with("exec")
+                || resolved.starts_with("spawn")
+            {
+                Severity::High
+            } else {
+                Severity::Medium
+            };
+
+            findings.push(AstFinding {
+                rule_id: "DEPSEC-P001".into(),
+                severity,
+                confidence: Confidence::High,
+                message: format!(
+                    "Const propagation: {obj_text}[{key_name}]() resolves to {obj_text}.{resolved}()"
+                ),
+                line,
+            });
+        }
+    }
+
+    // Also detect: obj[string_concat]() where the concat resolves to a dangerous name
+    // E.g., fs["read" + "File" + "Sync"](path) — the concat is inline, not a variable
+    let bracket_concat_query = Query::new(
+        &tree.language(),
+        r#"
+        (call_expression
+          function: (subscript_expression
+            object: (_) @obj
+            index: (binary_expression) @expr))
+        "#,
+    );
+
+    if let Ok(query) = bracket_concat_query {
+        let obj_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "obj")
+            .unwrap();
+        let expr_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "expr")
+            .unwrap();
+
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), source);
+
+        while let Some(m) = matches.next() {
+            let obj_cap = m.captures.iter().find(|c| c.index as usize == obj_idx);
+            let expr_cap = m.captures.iter().find(|c| c.index as usize == expr_idx);
+            let (Some(obj_cap), Some(expr_cap)) = (obj_cap, expr_cap) else {
+                continue;
+            };
+
+            let resolved = match resolve_node_to_string(&expr_cap.node, source) {
+                Some(v) => v,
+                None => continue,
+            };
+
+            if !DANGEROUS_RESOLVED_NAMES.contains(&resolved.as_str()) {
+                continue;
+            }
+
+            let obj_text = obj_cap.node.utf8_text(source).unwrap_or("<expr>");
+            let line = obj_cap.node.start_position().row + 1;
+
+            findings.push(AstFinding {
+                rule_id: "DEPSEC-P001".into(),
+                severity: Severity::High,
+                confidence: Confidence::High,
+                message: format!(
+                    "Const propagation: {obj_text}[...] resolves to {obj_text}.{resolved}()"
+                ),
                 line,
             });
         }

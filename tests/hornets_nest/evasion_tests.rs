@@ -17,7 +17,7 @@ pub fn run_all() -> Vec<VectorResult> {
             name: "hn-dynamic-property",
             layer: Layer::StaticScan,
             technique: "Dynamic property access",
-            expected: Expected::Miss, // Cross-line: concat on line 1, use on line 2 — needs AST const propagation
+            expected: Expected::Detect, // AST const propagation resolves cross-line string concat
             test_fn: test_dynamic_property,
         },
         EvasionTest {
@@ -73,7 +73,7 @@ pub fn run_all() -> Vec<VectorResult> {
             name: "hn-globalthis-eval",
             layer: Layer::StaticScan,
             technique: "globalThis[\"ev\"+\"al\"]()",
-            expected: Expected::Miss, // String concat is on same line but inside bracket access — needs deeper analysis
+            expected: Expected::Detect, // AST const propagation resolves variable to "eval"
             test_fn: test_globalthis_eval,
         },
         EvasionTest {
