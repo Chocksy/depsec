@@ -161,7 +161,7 @@ pub fn run_all() -> Vec<VectorResult> {
             name: "hn-getter-exec",
             layer: Layer::StaticScan,
             technique: "Object.defineProperty getter",
-            expected: Expected::Miss, // Chained call inside getter body not yet caught
+            expected: Expected::Detect, // AST detects chained require('child_process').exec()
             test_fn: test_getter_exec,
         },
         EvasionTest {

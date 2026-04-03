@@ -50,6 +50,9 @@ pub fn analyze(parser: &mut Parser, source: &str) -> Vec<AstFinding> {
     // Detect Reflect.apply/construct with dangerous function arguments
     find_dangerous_reflect(&tree, source_bytes, &mut findings);
 
+    // Detect chained calls: require('child_process').exec('cmd')
+    find_chained_require_calls(&tree, source_bytes, &mut findings);
+
     // Const propagation: resolve cross-line string assignments and detect
     // bracket-access calls like obj[variable]() where variable resolves to a dangerous name
     let const_table = build_const_table(&tree, source_bytes);
@@ -1378,6 +1381,73 @@ fn find_const_propagated_dangers(
                 line,
             });
         }
+    }
+}
+
+/// Detect chained calls like `require('child_process').exec('cmd')` where the
+/// require result isn't assigned to a variable. Catches E14 getter body pattern.
+fn find_chained_require_calls(
+    tree: &tree_sitter::Tree,
+    source: &[u8],
+    findings: &mut Vec<AstFinding>,
+) {
+    // Pattern: require('dangerous_module').method(args)
+    let query = Query::new(
+        &tree.language(),
+        r#"
+        (call_expression
+          function: (member_expression
+            object: (call_expression
+              function: (identifier) @req_fn
+              arguments: (arguments
+                (string (string_fragment) @module)))
+            property: (property_identifier) @method)
+          (#eq? @req_fn "require"))
+        "#,
+    );
+
+    let Ok(query) = query else { return };
+
+    let module_idx = query
+        .capture_names()
+        .iter()
+        .position(|n| *n == "module")
+        .unwrap();
+    let method_idx = query
+        .capture_names()
+        .iter()
+        .position(|n| *n == "method")
+        .unwrap();
+
+    let mut cursor = QueryCursor::new();
+    let mut matches = cursor.matches(&query, tree.root_node(), source);
+
+    while let Some(m) = matches.next() {
+        let module_cap = m.captures.iter().find(|c| c.index as usize == module_idx);
+        let method_cap = m.captures.iter().find(|c| c.index as usize == method_idx);
+        let (Some(module_cap), Some(method_cap)) = (module_cap, method_cap) else {
+            continue;
+        };
+
+        let module_name = module_cap.node.utf8_text(source).unwrap_or("");
+        let method_name = method_cap.node.utf8_text(source).unwrap_or("");
+
+        if !DANGEROUS_MODULES.contains(&module_name) {
+            continue;
+        }
+        if !DANGEROUS_METHODS.contains(&method_name) {
+            continue;
+        }
+
+        let line = module_cap.node.start_position().row + 1;
+
+        findings.push(AstFinding {
+            rule_id: "DEPSEC-P001".into(),
+            severity: Severity::High,
+            confidence: Confidence::High,
+            message: format!("Chained call: require('{module_name}').{method_name}()"),
+            line,
+        });
     }
 }
 
