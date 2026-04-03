@@ -219,19 +219,19 @@ All 13 vectors closed across 4 commits:
 - [x] Cross-line const propagation (E01, E10) — AST symbol table + bracket access resolution
 - [x] E14 getter body — chained require().exec() detection
 
-### Sprint 4: PHASE A COMPLETE
+### Sprint 4: COMPLETE
 - [x] WASM presence detection (P025) — first-in-market
-- [ ] Import/export capability analysis (wasm-tools crate)
-- [ ] Behavioral heuristics
+- [x] Import/export capability analysis — raw WASM binary parsing (no external crate)
+- [ ] Behavioral heuristics (CryptoNight signatures, entropy) — deferred
 
-### Sprint 5: PARTIALLY COMPLETE (Definitive Protect Mode)
+### Sprint 5: COMPLETE (Definitive Protect Mode)
 - [x] Removed CAPABILITY_ALLOWLIST — every package judged on behavior
 - [x] LLM triage default when API key exists (auto-detect, --no-triage to skip)
 - [x] Definitive output format (render_definitive — package-focused with LLM verdicts)
 - [x] Exit code uses TP-only verdicts (FP/NI from LLM → clean exit)
-- [ ] Phase 4: Confidence recalibration
-- [ ] Phase 5: Protect mode LLM integration
-- [ ] Phase 6: `depsec setup` wizard
+- [x] Phase 4: Confidence recalibration (P002 same-line → High)
+- [x] Phase 5: Protect mode post-install scan (delta packages, high-confidence only)
+- [x] Phase 6: `depsec setup` wizard (AI verdicts option + API key guidance)
 
 ### Sprint 6: Performance — Lockfile-Driven Scanner (NEW — 2026-04-03)
 - [x] Pre-filter files by extension in WalkDir (CEMS 299M: timeout → 14.7s)
