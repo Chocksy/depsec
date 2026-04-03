@@ -1044,11 +1044,12 @@ fn check_cross_line_decode_exec(content: &str, file: &str, findings: &mut Vec<Fi
 
 /// Signal combination: escalate findings when multiple weak signals co-occur in the same file.
 /// e.g., dynamic require + obfuscation = definitely malicious.
-fn apply_signal_combination(findings: &mut [Finding]) {
+fn apply_signal_combination(findings: &mut Vec<Finding>) {
     use std::collections::{HashMap, HashSet};
 
-    // Group rule IDs by file
+    // Group rule IDs by file AND by package
     let mut rules_by_file: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut rules_by_package: HashMap<String, HashSet<String>> = HashMap::new();
     for f in findings.iter() {
         if let Some(file) = &f.file {
             rules_by_file
@@ -1056,9 +1057,15 @@ fn apply_signal_combination(findings: &mut [Finding]) {
                 .or_default()
                 .insert(f.rule_id.clone());
         }
+        if let Some(pkg) = &f.package {
+            rules_by_package
+                .entry(pkg.clone())
+                .or_default()
+                .insert(f.rule_id.clone());
+        }
     }
 
-    // Escalation rules
+    // File-level escalation rules (existing)
     for (file, rules) in &rules_by_file {
         let has_dynamic_require = rules.contains("DEPSEC-P013");
         let has_obfuscation = rules.contains("DEPSEC-P014")
@@ -1088,6 +1095,97 @@ fn apply_signal_combination(findings: &mut [Finding]) {
             }
         }
     }
+
+    // Package-level cross-file escalation (new)
+    // Detects attack patterns split across multiple files within a package
+    let mut new_findings = Vec::new();
+    for (pkg, rules) in &rules_by_package {
+        let has_credential = rules.contains("DEPSEC-P004");
+        let has_network = rules.contains("DEPSEC-P003")
+            || rules.contains("DEPSEC-P006")
+            || rules.contains("DEPSEC-P010")
+            || rules.contains("DEPSEC-P011");
+        let has_exec = rules.contains("DEPSEC-P001") || rules.contains("DEPSEC-P008");
+        let has_obfuscation = rules.contains("DEPSEC-P014")
+            || rules.contains("DEPSEC-P017")
+            || rules.contains("DEPSEC-P007");
+        let has_dynamic = rules.contains("DEPSEC-P013");
+
+        // Cross-file exfiltration: credential read + network call in different files
+        if has_credential && (has_network || has_exec) {
+            // Only fire if signals are in DIFFERENT files (same-file already handled by file-level rules)
+            let cred_files: HashSet<_> = findings
+                .iter()
+                .filter(|f| f.package.as_deref() == Some(pkg) && f.rule_id == "DEPSEC-P004")
+                .filter_map(|f| f.file.clone())
+                .collect();
+            let net_files: HashSet<_> = findings
+                .iter()
+                .filter(|f| {
+                    f.package.as_deref() == Some(pkg)
+                        && (f.rule_id == "DEPSEC-P003"
+                            || f.rule_id == "DEPSEC-P006"
+                            || f.rule_id == "DEPSEC-P001")
+                })
+                .filter_map(|f| f.file.clone())
+                .collect();
+
+            if cred_files.intersection(&net_files).next().is_none() && !net_files.is_empty() {
+                new_findings.push(
+                    Finding::new(
+                        "DEPSEC-COMBO-001",
+                        Severity::Critical,
+                        format!(
+                            "Cross-file exfiltration pattern: credential read + network/exec in separate files within {pkg}"
+                        ),
+                    )
+                    .with_confidence(Confidence::High)
+                    .with_suggestion(
+                        "This package reads credentials in one file and has network/exec capability in another — likely data exfiltration",
+                    )
+                    .with_package(Some(pkg.clone())),
+                );
+            }
+        }
+
+        // Cross-file dropper: code execution + obfuscation in different files
+        if has_exec && has_obfuscation {
+            new_findings.push(
+                Finding::new(
+                    "DEPSEC-COMBO-002",
+                    Severity::Critical,
+                    format!(
+                        "Cross-file dropper pattern: code execution + obfuscation in separate files within {pkg}"
+                    ),
+                )
+                .with_confidence(Confidence::Medium)
+                .with_suggestion(
+                    "This package has obfuscated code in one file and shell/code execution in another — review manually",
+                )
+                .with_package(Some(pkg.clone())),
+            );
+        }
+
+        // Cross-file dynamic loader: dynamic require + obfuscation across files
+        if has_dynamic && has_obfuscation {
+            new_findings.push(
+                Finding::new(
+                    "DEPSEC-COMBO-003",
+                    Severity::High,
+                    format!(
+                        "Cross-file obfuscated loader: dynamic require + obfuscation in separate files within {pkg}"
+                    ),
+                )
+                .with_confidence(Confidence::Medium)
+                .with_suggestion(
+                    "Dynamic module loading combined with obfuscation across files — common in staged malware",
+                )
+                .with_package(Some(pkg.clone())),
+            );
+        }
+    }
+
+    findings.extend(new_findings);
 }
 
 fn truncate_line(line: &str, max: usize) -> String {

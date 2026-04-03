@@ -333,7 +333,10 @@ impl Check for CapabilitiesCheck {
     }
 }
 
-/// Scan all JS files in a package directory to build capability profile
+/// Scan all JS files in a package directory to build capability profile.
+/// Uses a two-pass approach to correctly detect cross-file capability combinations:
+/// Pass 1: detect base capabilities (network, fs_read, shell_exec, etc.)
+/// Pass 2: check credential paths across ALL files using aggregated fs_read state
 fn scan_package(pkg_dir: &Path) -> Option<PackageCapabilities> {
     let mut caps = PackageCapabilities::default();
 
@@ -354,10 +357,12 @@ fn scan_package(pkg_dir: &Path) -> Option<PackageCapabilities> {
         }
     }
 
-    // Scan JS/TS source files
+    // Pass 1: Scan JS/TS source files and buffer contents for cross-file analysis
+    let mut file_contents: Vec<String> = Vec::new();
+
     for entry in WalkDir::new(pkg_dir)
-        .max_depth(5) // Don't go too deep
-        .follow_links(false) // Security: don't follow symlinks out of project
+        .max_depth(5)
+        .follow_links(false)
         .into_iter()
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file())
@@ -391,6 +396,19 @@ fn scan_package(pkg_dir: &Path) -> Option<PackageCapabilities> {
         };
 
         detect_capabilities(&content, &mut caps);
+        file_contents.push(content);
+    }
+
+    // Pass 2: Cross-file credential path check.
+    // credential_read requires fs_read (from any file) + credential path (in any file).
+    // The per-file detect_capabilities may miss this if files are processed in wrong order.
+    if caps.fs_read && !caps.credential_read {
+        for content in &file_contents {
+            if CREDENTIAL_PATHS.iter().any(|p| content.contains(p)) {
+                caps.credential_read = true;
+                break;
+            }
+        }
     }
 
     Some(caps)

