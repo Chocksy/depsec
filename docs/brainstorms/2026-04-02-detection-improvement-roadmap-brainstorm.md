@@ -298,20 +298,22 @@ for pkg in packages {
 - [x] `files_to_scan.par_iter().fold()` with per-thread AstAnalyzer
 - [x] POS: 9m19s → 3m06s (3x), ai-standups: 2m03s → 49s (2.5x), CEMS: 13.3s → 10.6s
 
-**Phase 4: Python/Ruby equivalents**
-- [ ] pip: parse requirements.txt or poetry.lock for package names
-  - Walk `.venv/lib/pythonX.Y/site-packages/<pkg>/` per package
-- [ ] Bundler: parse Gemfile.lock GEM specs
-  - Walk `vendor/bundle/ruby/X.Y.Z/gems/<pkg>/` per package
-- [ ] Cargo: parse Cargo.lock (already done in scan_cache.rs)
+**Phase 4: Python/Ruby/pnpm/yarn equivalents**
+- [x] pip: parse requirements.txt with PEP 503 normalization + venv Python version detection
+- [x] pnpm: parse pnpm-lock.yaml v9 (line-based, no YAML crate)
+- [x] yarn: parse yarn.lock v1 (header+version+integrity)
+- [x] Bundler: parse Gemfile.lock GEM specs (done in Sprint 6 infrastructure)
+- [x] Cargo: parse Cargo.lock (done in Sprint 6 infrastructure)
+- [x] Multi-ecosystem: parse_lockfile() combines ALL lockfiles (npm+pnpm+yarn+pip+gem+cargo)
+- [x] Validated on 25 real projects — zero crashes, all lockfile types working
 
 ### Target Performance
 
-| Scenario | Current | Target |
-|----------|---------|--------|
-| POS first scan (412M) | >120s timeout | <15s |
-| POS repeat scan (no changes) | >120s timeout | <1s |
-| POS after `npm install new-pkg` | >120s timeout | <2s |
+| Scenario | Current | Target | Actual |
+|----------|---------|--------|--------|
+| POS first scan (412M) | >120s timeout | <15s | 160s (patterns: fast, secrets: bottleneck) |
+| POS repeat scan (no changes) | >120s timeout | <1s | 18s (patterns: 0s cached, other checks: 18s) |
+| POS after `npm install new-pkg` | >120s timeout | <2s | ~18s (delta scan) |
 | CEMS first scan (299M) | 14.7s | <10s |
 | CEMS repeat scan | 14.7s | <1s |
 
