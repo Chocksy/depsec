@@ -197,65 +197,137 @@ One gap remaining = **97% detection rate**.
 
 ## Execution Status (as of 2026-04-03)
 
-### Sprint 1: COMPLETE (13/13 vectors closed — 45.9% → 78.4%)
-All quick fixes and AST extensions shipped across 4 commits.
+### Sprint 1: COMPLETE (45.9% → 78.4%)
+All 13 vectors closed across 4 commits:
+- [x] needs_ast gate bug fix (Python/Ruby AST was dead code)
+- [x] P024 pickle, P034 Ruby pipe-open, P025 WASM detection
+- [x] P014 regex broadened, large file sampling, unicode normalization
+- [x] 7 JS AST extensions (mainModule.require, (0,require), global.Function, etc.)
+- [x] Reflect.apply detection
 
-### Sprint 2: MOSTLY COMPLETE (78.4% → 81.1%)
-- [x] credential_read cross-file bug fix
+### Sprint 2: MOSTLY COMPLETE (78.4% → 83.8%)
+- [x] credential_read cross-file bug fix (two-pass scan_package)
 - [x] Package-level signal combination (COMBO-001/002/003)
 - [x] E14 chained require().exec()
 - [x] E22 Python alias resolution
-- [ ] Import graph module (deferred — Layer 1 capability aggregation was sufficient)
+- [ ] Import graph module (deferred — Layer 1 capability aggregation sufficient)
 
 ### Sprint 3: PARTIALLY COMPLETE (83.8% → 86.5%)
 - [x] global.require alias chain tracking
 - [x] Line-level string concat resolution
 - [ ] Cross-line const propagation (E01, E10) — needs AST symbol table
 
-### Sprint 4: PHASE A COMPLETE (86.5%)
-- [x] WASM presence detection (P025)
-- [ ] Import/export capability analysis
+### Sprint 4: PHASE A COMPLETE
+- [x] WASM presence detection (P025) — first-in-market
+- [ ] Import/export capability analysis (wasm-tools crate)
 - [ ] Behavioral heuristics
 
-### Current: 32/37 (86.5%) — 5 remaining gaps
-- E01, E10: cross-line const propagation
-- E02: Proxy wrap (runtime only)
-- E12: JSON payload cross-file data flow
-- E14: defineProperty getter body
+### Sprint 5: PARTIALLY COMPLETE (Definitive Protect Mode)
+- [x] Removed CAPABILITY_ALLOWLIST — every package judged on behavior
+- [x] LLM triage default when API key exists (auto-detect, --no-triage to skip)
+- [x] Definitive output format (render_definitive — package-focused with LLM verdicts)
+- [x] Exit code uses TP-only verdicts (FP/NI from LLM → clean exit)
+- [ ] Phase 4: Confidence recalibration
+- [ ] Phase 5: Protect mode LLM integration
+- [ ] Phase 6: `depsec setup` wizard
 
-## Sprint 5: Definitive Protect Mode (NEW — 2026-04-03)
+### Sprint 6: Performance — Lockfile-Driven Scanner (NEW — 2026-04-03)
+- [x] Pre-filter files by extension in WalkDir (CEMS 299M: timeout → 14.7s)
+- [x] Skip noise directories (.cache, @types, __pycache__, .min.js, etc.)
+- [x] Lock file cache infrastructure (scan_cache.rs — npm/Cargo/Gemfile parsers)
+- [x] Directory-level pruning for cached packages
+- [ ] **CRITICAL: Lockfile-driven scanner** (see below)
 
-**The critical insight**: Detection without precision is noise. 3,254 findings on POS
-is useless. `depsec protect` must be BINARY: ✓ clean or ✗ BLOCKED.
+### Detection: 32/37 (86.5%)
+5 remaining gaps: E01, E10 (const propagation), E02 (Proxy — runtime), E12 (JSON cross-file), E14 (getter body)
+
+### Real-world validation:
+- Planted malicious Python package in CEMS → all 3 techniques detected (P021+P024+P003)
+- Planted malicious JS packages in POS → all techniques detected (P001+P002+P016+CAP:exfil)
+- LLM definitive mode working on pxls (Groq via OpenRouter)
+
+---
+
+## NEXT SESSION: Sprint 6 — Lockfile-Driven Scanner
+
+**This is the #1 priority.** Large JS projects (POS 412M, depsec.dev 138M) still timeout.
 
 ### The Problem
-- POS scan: 3,254 findings → nobody reads this
-- CEMS scan: 1,355 findings → noise
-- `depsec protect npm install` should show 0-2 actionable alerts, not thousands
+WalkDir traverses ALL files in node_modules (50K+ files for POS). Even with filtering,
+enumerating 50K entries takes >60s. The cache only helps on REPEAT scans — first scan
+still times out.
 
-### The Pipeline
+### The Solution: Don't Walk, Iterate
+Instead of `WalkDir::new("node_modules")`, use the lockfile as the package index:
+
+```rust
+// CURRENT (slow): walk entire dep tree
+for file in WalkDir::new("node_modules").max_depth(7) { scan(file); }
+
+// NEW (fast): iterate packages from lockfile, walk each one shallowly
+let packages = parse_lockfile("package-lock.json"); // 639 entries, 500ms
+for pkg in packages {
+    let pkg_dir = format!("node_modules/{}", pkg.name);
+    for file in WalkDir::new(pkg_dir).max_depth(3) { scan(file); }
+}
 ```
-Static scan → 3,000 raw signals
-  → Confidence filter (Critical/High + High confidence only) → 15-20
-  → Package verdict (known-good allowlist, build tool recognition) → 0-3
-  → (Future) LLM triage → 0-1 definitive blocks
-  → OUTPUT: ✓ clean OR ✗ BLOCKED: reason
-```
 
-### Key Design Principles
-1. **`scan` mode = audit** (all findings, for security teams)
-2. **`protect` mode = seatbelt** (binary verdict only, for developers)
-3. **Known-good packages are silenced** (esbuild, playwright, typescript do build-tool things)
-4. **Only definitively suspicious patterns block** (credential exfil + network, not just eval())
-5. **LLM is the last resort** (sends top 2-3 suspects for final verdict)
+### Why This Works
+- Lockfile parse: 500ms (639 packages from POS)
+- Per-package walk (max_depth 3): ~5-10 files each, ~50ms
+- Total: 639 × 50ms = ~32s (parallelizable to ~8s with rayon)
+- With cache: only scan new/changed packages → <1s for repeat scans
 
-### What Needs to Change
-- Protect mode applies aggressive confidence + severity filter
-- Built-in allowlist for well-known build tools (esbuild, webpack, vite, etc.)
-- Package popularity/download count as a trust signal
-- `depsec protect` output: single line ✓/✗, not a report
+### Implementation Plan
 
-## Next Steps
+**Phase 1: Lockfile-driven package enumeration**
+- [ ] New function `scan_from_lockfile(root, config)` in `src/checks/patterns.rs`
+- [ ] Reads lockfile → gets list of (name, version, dir_path) entries
+- [ ] For each package: shallow WalkDir (max_depth 3) + existing scan logic
+- [ ] Falls back to full WalkDir if no lockfile exists
+- [ ] Support: package-lock.json (npm), yarn.lock, Cargo.lock, Gemfile.lock
 
-→ `/workflows:plan` for Sprint 5: Definitive Protect Mode
-→ Then: Sprint 3 remainder (const propagation), Sprint 4 remainder (WASM deep analysis)
+**Phase 2: Cache integration**
+- [ ] On first scan: build cache from lockfile integrity hashes
+- [ ] On repeat scan: skip packages where integrity matches cache
+- [ ] On `npm install new-pkg`: only scan the delta (new/changed packages)
+- [ ] Cache stored in `.depsec/scan-cache.json`
+
+**Phase 3: Parallel package scanning**
+- [ ] Add `rayon` to Cargo.toml for data parallelism
+- [ ] `packages.par_iter().for_each(|pkg| scan_package(pkg))` 
+- [ ] Expected: 32s → ~8s on POS (4-core parallelism)
+
+**Phase 4: Python/Ruby equivalents**
+- [ ] pip: parse requirements.txt or poetry.lock for package names
+  - Walk `.venv/lib/pythonX.Y/site-packages/<pkg>/` per package
+- [ ] Bundler: parse Gemfile.lock GEM specs
+  - Walk `vendor/bundle/ruby/X.Y.Z/gems/<pkg>/` per package
+- [ ] Cargo: parse Cargo.lock (already done in scan_cache.rs)
+
+### Target Performance
+
+| Scenario | Current | Target |
+|----------|---------|--------|
+| POS first scan (412M) | >120s timeout | <15s |
+| POS repeat scan (no changes) | >120s timeout | <1s |
+| POS after `npm install new-pkg` | >120s timeout | <2s |
+| CEMS first scan (299M) | 14.7s | <10s |
+| CEMS repeat scan | 14.7s | <1s |
+
+### Files to modify
+- `src/checks/patterns.rs` — add lockfile-driven scan path alongside WalkDir
+- `src/scan_cache.rs` — already built, wire into the new scan path
+- `Cargo.toml` — add `rayon` for parallel scanning (Phase 3)
+
+### Reference plans
+- Sprint 5 plan: `docs/plans/2026-04-03-feat-sprint5-definitive-protect-mode-plan.md`
+- Sprint 2 plan: `docs/plans/2026-04-03-feat-sprint2-package-capability-aggregation-plan.md`
+- Sprint 1 plan: `docs/plans/2026-04-02-feat-sprint1-detection-quick-wins-ast-extensions-plan.md`
+- Hornets nest plan: `docs/plans/2026-04-02-feat-hornets-nest-adversarial-test-suite-plan.md`
+
+### Key context files
+- `src/scan_cache.rs` — lockfile parsers + cache already built
+- `src/checks/patterns.rs` — current WalkDir-based scanner (the code to replace)
+- `src/checks/capabilities.rs` — also needs lockfile-driven approach for its scan_package()
+- `tests/hornets_nest/` — adversarial test suite (22 tests, 86.5% detection)
