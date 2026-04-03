@@ -236,7 +236,7 @@ All 13 vectors closed across 4 commits:
 - [x] Skip noise directories (.cache, @types, __pycache__, .min.js, etc.)
 - [x] Lock file cache infrastructure (scan_cache.rs — npm/Cargo/Gemfile parsers)
 - [x] Directory-level pruning for cached packages
-- [ ] **CRITICAL: Lockfile-driven scanner** (see below)
+- [x] **CRITICAL: Lockfile-driven scanner** (Phase 1+2 complete)
 
 ### Detection: 32/37 (86.5%)
 5 remaining gaps: E01, E10 (const propagation), E02 (Proxy — runtime), E12 (JSON cross-file), E14 (getter body)
@@ -281,17 +281,17 @@ for pkg in packages {
 ### Implementation Plan
 
 **Phase 1: Lockfile-driven package enumeration**
-- [ ] New function `scan_from_lockfile(root, config)` in `src/checks/patterns.rs`
-- [ ] Reads lockfile → gets list of (name, version, dir_path) entries
-- [ ] For each package: shallow WalkDir (max_depth 3) + existing scan logic
-- [ ] Falls back to full WalkDir if no lockfile exists
-- [ ] Support: package-lock.json (npm), yarn.lock, Cargo.lock, Gemfile.lock
+- [x] New function `collect_files_from_lockfile()` + `collect_files_walkdir()` in `src/checks/patterns.rs`
+- [x] Reads lockfile → gets list of (name, version, dir_path) entries via `LockPackage.dir_path`
+- [x] For each package: shallow WalkDir (max_depth 3) + existing scan logic
+- [x] Falls back to full WalkDir if no lockfile exists
+- [x] Support: package-lock.json (npm), yarn.lock, Cargo.lock, Gemfile.lock
 
 **Phase 2: Cache integration**
-- [ ] On first scan: build cache from lockfile integrity hashes
-- [ ] On repeat scan: skip packages where integrity matches cache
-- [ ] On `npm install new-pkg`: only scan the delta (new/changed packages)
-- [ ] Cache stored in `.depsec/scan-cache.json`
+- [x] On first scan: build cache from lockfile integrity hashes
+- [x] On repeat scan: skip packages where integrity matches cache
+- [x] On `npm install new-pkg`: only scan the delta (new/changed packages)
+- [x] Cache stored in `.depsec/scan-cache.json`
 
 **Phase 3: Parallel package scanning**
 - [ ] Add `rayon` to Cargo.toml for data parallelism

@@ -172,6 +172,7 @@ const PATTERN_RULES: &[PatternRule] = &[
     },
 ];
 
+#[cfg(test)]
 const BINARY_EXTENSIONS: &[&str] = &[
     ".node", ".so", ".dll", ".dylib", ".wasm", ".exe", ".bin", ".png", ".jpg", ".jpeg", ".gif",
     ".bmp", ".ico", ".svg", ".ttf", ".woff", ".woff2", ".eot", ".zip", ".tar", ".gz", ".bz2",
@@ -179,6 +180,7 @@ const BINARY_EXTENSIONS: &[&str] = &[
 ];
 
 /// Extensions that produce false positives — metadata/declarations, not executable code
+#[cfg(test)]
 const SKIP_EXTENSIONS: &[&str] = &[
     ".map",         // source maps — stringified source, never executed
     ".d.ts",        // TypeScript declarations — type definitions only
@@ -210,6 +212,7 @@ const SKIP_DIR_NAMES: &[&str] = &[
 ];
 
 /// Non-code files inside dep dirs that should be skipped
+#[cfg(test)]
 const SKIP_FILENAMES: &[&str] = &[
     "README.md",
     "readme.md",
@@ -229,6 +232,75 @@ const DEP_DIRS: &[&str] = &[
 ];
 
 const MAX_FILE_SIZE: u64 = 500_000; // 500KB
+
+/// Collect files to scan using lockfile package entries (fast path).
+/// Instead of walking the entire dep tree, walks each package directory shallowly.
+fn collect_files_from_lockfile(
+    root: &Path,
+    packages: &[crate::scan_cache::LockPackage],
+    extra_skip_dirs: &[String],
+) -> Vec<std::path::PathBuf> {
+    let mut files = Vec::new();
+    for pkg in packages {
+        let pkg_dir = match &pkg.dir_path {
+            Some(dp) => root.join(dp),
+            None => continue, // No dir_path (e.g., Cargo registry) — skip
+        };
+        if !pkg_dir.exists() {
+            continue;
+        }
+
+        for entry in WalkDir::new(&pkg_dir)
+            .follow_links(false)
+            .max_depth(3) // Shallow: package root + src/lib/dist
+            .into_iter()
+            .filter_entry(|e| {
+                if e.file_type().is_dir() {
+                    let name = e.file_name().to_str().unwrap_or("");
+                    return !should_skip_dir(name) && !extra_skip_dirs.iter().any(|d| d == name);
+                }
+                let name = e.file_name().to_str().unwrap_or("");
+                is_scannable_file(name)
+            })
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file())
+        {
+            files.push(entry.into_path());
+        }
+    }
+    files
+}
+
+/// Collect files to scan using full WalkDir (fallback when no lockfile exists).
+fn collect_files_walkdir(root: &Path, extra_skip_dirs: &[String]) -> Vec<std::path::PathBuf> {
+    let mut files = Vec::new();
+    for dep_dir_name in DEP_DIRS {
+        let dep_dir = root.join(dep_dir_name);
+        if !dep_dir.exists() {
+            continue;
+        }
+
+        let skip = extra_skip_dirs.to_vec();
+        for entry in WalkDir::new(&dep_dir)
+            .follow_links(false)
+            .max_depth(7)
+            .into_iter()
+            .filter_entry(move |e| {
+                if e.file_type().is_dir() {
+                    let name = e.file_name().to_str().unwrap_or("");
+                    return !should_skip_dir(name) && !skip.iter().any(|d| d == name);
+                }
+                let name = e.file_name().to_str().unwrap_or("");
+                is_scannable_file(name)
+            })
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file())
+        {
+            files.push(entry.into_path());
+        }
+    }
+    files
+}
 
 pub struct PatternsCheck;
 
@@ -260,176 +332,132 @@ impl Check for PatternsCheck {
         let mut ast_analyzer = AstAnalyzer::new();
 
         // Lock file-based caching: only scan new/changed packages
-        let packages_to_scan = crate::scan_cache::get_packages_to_scan(ctx.root);
-        let using_cache = packages_to_scan.is_some();
-        if let Some(ref pkgs) = packages_to_scan {
-            if pkgs.is_empty() {
-                pass_messages.push("All packages cached — no changes since last scan".into());
-                return Ok(CheckResult::new(
-                    self.name().to_string(),
-                    findings,
-                    10.0,
-                    pass_messages,
-                ));
-            }
+        let lock_packages = crate::scan_cache::parse_lockfile(ctx.root);
+        let has_lockfile = !lock_packages.is_empty();
+        let cache = crate::scan_cache::ScanCache::load(ctx.root);
+        let packages_to_scan = cache.packages_to_scan(&lock_packages);
+
+        if has_lockfile && packages_to_scan.is_empty() && !cache.scanned.is_empty() {
+            pass_messages.push("All packages cached — no changes since last scan".into());
+            return Ok(CheckResult::new(
+                self.name().to_string(),
+                findings,
+                10.0,
+                pass_messages,
+            ));
         }
 
-        // Scan dependency directories
-        for dep_dir_name in DEP_DIRS {
-            let dep_dir = ctx.root.join(dep_dir_name);
-            if !dep_dir.exists() {
-                continue;
-            }
+        // Collect files to scan: lockfile-driven (fast) or WalkDir fallback (slow)
+        let files_to_scan = if has_lockfile && !packages_to_scan.is_empty() {
+            // FAST PATH: iterate only packages that need scanning, shallow walk each
+            collect_files_from_lockfile(ctx.root, &packages_to_scan, &ctx.config.patterns.skip_dirs)
+        } else if has_lockfile {
+            // First scan with lockfile: scan all packages but use lockfile for enumeration
+            collect_files_from_lockfile(ctx.root, &lock_packages, &ctx.config.patterns.skip_dirs)
+        } else {
+            // FALLBACK: no lockfile — full WalkDir (old behavior)
+            collect_files_walkdir(ctx.root, &ctx.config.patterns.skip_dirs)
+        };
 
-            let extra_skip_dirs = &ctx.config.patterns.skip_dirs;
-            let cache_pkgs = packages_to_scan.clone();
-            for entry in WalkDir::new(&dep_dir)
-                .follow_links(false)
-                .max_depth(7)
-                .into_iter()
-                .filter_entry(move |e| {
-                    if e.file_type().is_dir() {
-                        let name = e.file_name().to_str().unwrap_or("");
+        if !files_to_scan.is_empty() && has_lockfile {
+            let total = if packages_to_scan.is_empty() {
+                lock_packages.len()
+            } else {
+                packages_to_scan.len()
+            };
+            pass_messages.push(format!(
+                "Lockfile-driven scan: {total} package{} to scan",
+                if total == 1 { "" } else { "s" }
+            ));
+        }
 
-                        // Skip known noise directories
-                        if should_skip_dir(name) || extra_skip_dirs.iter().any(|d| d == name) {
-                            return false;
+        // Scan collected files
+        for path in &files_to_scan {
+            // For large files, sample first+last 50KB instead of skipping entirely.
+            // Attackers can hide malicious code in >500KB bundles to evade scanners.
+            let is_large = path
+                .metadata()
+                .map(|m| m.len() > MAX_FILE_SIZE)
+                .unwrap_or(false);
+
+            // Skip minified JS for entropy check
+            let is_minified = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.ends_with(".min.js") || n.ends_with(".min.mjs"))
+                .unwrap_or(false);
+
+            let content = if is_large {
+                // Sample first and last 50KB of large files
+                match std::fs::read(path) {
+                    Ok(bytes) => {
+                        let head_len = 50_000.min(bytes.len());
+                        let tail_start = bytes.len().saturating_sub(50_000);
+                        let mut sample = bytes[..head_len].to_vec();
+                        if tail_start > head_len {
+                            sample.extend_from_slice(&bytes[tail_start..]);
                         }
-
-                        // Skip ENTIRE package directories if they're cached
-                        // This is the key optimization: prune the entire subtree
-                        if let Some(ref pkgs) = cache_pkgs {
-                            // Check if this directory is a package dir inside a dep dir
-                            // e.g., node_modules/lodash or node_modules/@scope/name
-                            let path = e.path();
-                            if let Ok(rel) = path.strip_prefix(ctx.root) {
-                                let rel_str = rel.to_string_lossy();
-                                if let Some(pkg_name) = extract_package_name(&rel_str) {
-                                    // Only skip if the current dir IS the package root
-                                    // (not a subdirectory within a package we're scanning)
-                                    let expected_dir = if pkg_name.starts_with('@') {
-                                        format!("{dep_dir_name}/{pkg_name}")
-                                    } else {
-                                        format!("{dep_dir_name}/{pkg_name}")
-                                    };
-                                    if rel_str == expected_dir && !pkgs.contains(&pkg_name) {
-                                        return false; // Skip this entire package tree
-                                    }
-                                }
-                            }
-                        }
-
-                        return true;
+                        String::from_utf8_lossy(&sample).to_string()
                     }
-                    // For files: pre-filter by extension
-                    let name = e.file_name().to_str().unwrap_or("");
-                    is_scannable_file(name)
-                })
-                .filter_map(|e| e.ok())
-                .filter(|e| e.file_type().is_file())
-            {
-                let path = entry.path();
-
-                // Skip files from cached (already-scanned) packages
-                if using_cache {
-                    if let Some(ref pkgs) = packages_to_scan {
-                        let rel = path
-                            .strip_prefix(ctx.root)
-                            .unwrap_or(path)
-                            .to_string_lossy();
-                        if let Some(pkg_name) = extract_package_name(&rel) {
-                            if !pkgs.contains(&pkg_name) {
-                                continue; // Package hasn't changed — skip
-                            }
-                        }
-                    }
+                    Err(_) => continue,
                 }
+            } else {
+                match std::fs::read_to_string(path) {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                }
+            };
 
-                // For large files, sample first+last 50KB instead of skipping entirely.
-                // Attackers can hide malicious code in >500KB bundles to evade scanners.
-                let is_large = path
-                    .metadata()
-                    .map(|m| m.len() > MAX_FILE_SIZE)
-                    .unwrap_or(false);
+            scanned_files += 1;
+            let rel_path = path
+                .strip_prefix(ctx.root)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .to_string();
 
-                // Skip minified JS for entropy check
-                let is_minified = path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .map(|n| n.ends_with(".min.js") || n.ends_with(".min.mjs"))
-                    .unwrap_or(false);
-
-                let content = if is_large {
-                    // Sample first and last 50KB of large files
-                    match std::fs::read(path) {
-                        Ok(bytes) => {
-                            let head_len = 50_000.min(bytes.len());
-                            let tail_start = bytes.len().saturating_sub(50_000);
-                            let mut sample = bytes[..head_len].to_vec();
-                            if tail_start > head_len {
-                                sample.extend_from_slice(&bytes[tail_start..]);
-                            }
-                            String::from_utf8_lossy(&sample).to_string()
-                        }
-                        Err(_) => continue,
+            // AST analysis — parse with tree-sitter if the file mentions dangerous
+            // patterns that need structural analysis. Language-aware probes ensure
+            // Python/Ruby AST rules (P020-P033) are triggered, not just JS.
+            let lang = crate::ast::detect_language(path);
+            let needs_ast = lang.is_some()
+                && match lang {
+                    Some(crate::ast::Lang::JavaScript | crate::ast::Lang::TypeScript) => {
+                        content.contains("child_process")
+                            || content.contains("shelljs")
+                            || content.contains("execa")
+                            || content.contains("cross-spawn")
+                            || content.contains("new Function")
+                            || content.contains("require(")
+                            || content.contains("import(")
+                            || content.contains("fromCharCode")
+                            || content.contains("unlinkSync")
+                            || content.contains("rmSync")
                     }
-                } else {
-                    match std::fs::read_to_string(path) {
-                        Ok(c) => c,
-                        Err(_) => continue,
+                    Some(crate::ast::Lang::Python) => {
+                        content.contains("subprocess")
+                            || content.contains("os.system")
+                            || content.contains("os.popen")
+                            || content.contains("eval(")
+                            || content.contains("exec(")
+                            || content.contains("__import__")
+                            || content.contains("pickle")
                     }
+                    Some(crate::ast::Lang::Ruby) => {
+                        content.contains("eval")
+                            || content.contains("system")
+                            || content.contains("exec")
+                            || content.contains("`")
+                            || content.contains("send(")
+                            || content.contains("open(")
+                    }
+                    _ => false,
                 };
 
-                scanned_files += 1;
-                let rel_path = path
-                    .strip_prefix(ctx.root)
-                    .unwrap_or(path)
-                    .to_string_lossy()
-                    .to_string();
-
-                // AST analysis — parse with tree-sitter if the file mentions dangerous
-                // patterns that need structural analysis. Language-aware probes ensure
-                // Python/Ruby AST rules (P020-P033) are triggered, not just JS.
-                let lang = crate::ast::detect_language(path);
-                let needs_ast = lang.is_some()
-                    && match lang {
-                        Some(crate::ast::Lang::JavaScript | crate::ast::Lang::TypeScript) => {
-                            content.contains("child_process")
-                                || content.contains("shelljs")
-                                || content.contains("execa")
-                                || content.contains("cross-spawn")
-                                || content.contains("new Function")
-                                || content.contains("require(")
-                                || content.contains("import(")
-                                || content.contains("fromCharCode")
-                                || content.contains("unlinkSync")
-                                || content.contains("rmSync")
-                        }
-                        Some(crate::ast::Lang::Python) => {
-                            content.contains("subprocess")
-                                || content.contains("os.system")
-                                || content.contains("os.popen")
-                                || content.contains("eval(")
-                                || content.contains("exec(")
-                                || content.contains("__import__")
-                                || content.contains("pickle")
-                        }
-                        Some(crate::ast::Lang::Ruby) => {
-                            content.contains("eval")
-                                || content.contains("system")
-                                || content.contains("exec")
-                                || content.contains("`")
-                                || content.contains("send(")
-                                || content.contains("open(")
-                        }
-                        _ => false,
-                    };
-
-                let ast_handled = if needs_ast {
-                    let ast_findings = ast_analyzer.analyze(path, &content);
-                    let pkg = extract_package_name(&rel_path);
-                    for af in &ast_findings {
-                        let suggestion = match af.rule_id.as_str() {
+            let ast_handled = if needs_ast {
+                let ast_findings = ast_analyzer.analyze(path, &content);
+                let pkg = extract_package_name(&rel_path);
+                for af in &ast_findings {
+                    let suggestion = match af.rule_id.as_str() {
                             "DEPSEC-P001" => "Verify commands are static or properly escaped — safe for build tools, suspicious for runtime libraries",
                             "DEPSEC-P008" => "Expected for template engines — verify template inputs are properly escaped",
                             "DEPSEC-P013" => "Dynamic require() is almost never legitimate in dependencies — this is a strong malware indicator",
@@ -438,88 +466,87 @@ impl Check for PatternsCheck {
                             "DEPSEC-P034" => "open(\"|\") spawns a shell command — avoid with untrusted input",
                             _ => "Review this dependency for suspicious behavior",
                         };
-                        findings.push(
-                            Finding::new(af.rule_id.clone(), af.severity, af.message.clone())
-                                .with_file(&rel_path, af.line)
-                                .with_confidence(af.confidence)
-                                .with_suggestion(suggestion)
-                                .with_package(pkg.clone()),
-                        );
+                    findings.push(
+                        Finding::new(af.rule_id.clone(), af.severity, af.message.clone())
+                            .with_file(&rel_path, af.line)
+                            .with_confidence(af.confidence)
+                            .with_suggestion(suggestion)
+                            .with_package(pkg.clone()),
+                    );
+                }
+                true
+            } else {
+                false
+            };
+
+            // Pre-compute whether this file has any dangerous exec module
+            // for P001 gating — if a JS/TS file doesn't mention child_process etc.,
+            // regex.exec()/db.exec() are always benign, skip P001 entirely.
+            let has_dangerous_exec_module =
+                DANGEROUS_EXEC_MODULES.iter().any(|m| content.contains(m));
+
+            // Regex patterns — skip AST-handled rules for JS/TS files
+            for (line_num, raw_line) in content.lines().enumerate() {
+                // Pre-process line for evasion resistance:
+                // 1. Normalize confusable unicode (Cyrillic → Latin)
+                // 2. Resolve string concatenation ("read" + "File" → "readFile")
+                let normalized = normalize_confusables(raw_line);
+                let line = &resolve_string_concat(&normalized);
+                for (rule, re) in &compiled {
+                    // If AST analyzed this JS/TS file, skip P001/P008/P013 (AST handles them).
+                    // For Python/Ruby, the JS-specific AST rules don't apply — regex still runs.
+                    if ast_handled && is_ast_rule(rule.rule_id) && is_js_or_ts(path) {
+                        continue;
                     }
-                    true
-                } else {
-                    false
-                };
 
-                // Pre-compute whether this file has any dangerous exec module
-                // for P001 gating — if a JS/TS file doesn't mention child_process etc.,
-                // regex.exec()/db.exec() are always benign, skip P001 entirely.
-                let has_dangerous_exec_module =
-                    DANGEROUS_EXEC_MODULES.iter().any(|m| content.contains(m));
+                    // P001 (eval/exec): For JS/TS files without dangerous modules,
+                    // skip exec() matching — regex.exec(), db.exec() are benign.
+                    // eval() is NOT gated: it's always suspicious in any context.
+                    if rule.rule_id == "DEPSEC-P001"
+                        && is_js_or_ts(path)
+                        && !has_dangerous_exec_module
+                    {
+                        // Only skip if this particular match is exec(), not eval()
+                        let trimmed = line.trim();
+                        if !trimmed.contains("eval") {
+                            continue;
+                        }
+                    }
 
-                // Regex patterns — skip AST-handled rules for JS/TS files
-                for (line_num, raw_line) in content.lines().enumerate() {
-                    // Pre-process line for evasion resistance:
-                    // 1. Normalize confusable unicode (Cyrillic → Latin)
-                    // 2. Resolve string concatenation ("read" + "File" → "readFile")
-                    let normalized = normalize_confusables(raw_line);
-                    let line = &resolve_string_concat(&normalized);
-                    for (rule, re) in &compiled {
-                        // If AST analyzed this JS/TS file, skip P001/P008/P013 (AST handles them).
-                        // For Python/Ruby, the JS-specific AST rules don't apply — regex still runs.
-                        if ast_handled && is_ast_rule(rule.rule_id) && is_js_or_ts(path) {
+                    if re.is_match(line) {
+                        // Special handling for P006: only flag in package.json scripts
+                        if rule.rule_id == "DEPSEC-P006" && !is_install_script(path, line) {
                             continue;
                         }
 
-                        // P001 (eval/exec): For JS/TS files without dangerous modules,
-                        // skip exec() matching — regex.exec(), db.exec() are benign.
-                        // eval() is NOT gated: it's always suspicious in any context.
-                        if rule.rule_id == "DEPSEC-P001"
-                            && is_js_or_ts(path)
-                            && !has_dangerous_exec_module
-                        {
-                            // Only skip if this particular match is exec(), not eval()
-                            let trimmed = line.trim();
-                            if !trimmed.contains("eval") {
-                                continue;
-                            }
-                        }
-
-                        if re.is_match(line) {
-                            // Special handling for P006: only flag in package.json scripts
-                            if rule.rule_id == "DEPSEC-P006" && !is_install_script(path, line) {
-                                continue;
-                            }
-
-                            let snippet = truncate_line(line, 80);
-                            findings.push(
-                                Finding::new(
-                                    rule.rule_id,
-                                    rule.severity,
-                                    format!("{}: {snippet}", rule.description),
-                                )
-                                .with_file(&rel_path, line_num + 1)
-                                .with_confidence(rule.confidence)
-                                .with_suggestion(rule.suggestion)
-                                .with_package(extract_package_name(&rel_path)),
-                            );
-                        }
+                        let snippet = truncate_line(line, 80);
+                        findings.push(
+                            Finding::new(
+                                rule.rule_id,
+                                rule.severity,
+                                format!("{}: {snippet}", rule.description),
+                            )
+                            .with_file(&rel_path, line_num + 1)
+                            .with_confidence(rule.confidence)
+                            .with_suggestion(rule.suggestion)
+                            .with_package(extract_package_name(&rel_path)),
+                        );
                     }
                 }
+            }
 
-                // DEPSEC-P007: High-entropy strings (skip minified files)
-                if !is_minified && !ignored_rules.contains(&"DEPSEC-P007") {
-                    check_entropy(&content, &rel_path, &mut findings);
-                }
+            // DEPSEC-P007: High-entropy strings (skip minified files)
+            if !is_minified && !ignored_rules.contains(&"DEPSEC-P007") {
+                check_entropy(&content, &rel_path, &mut findings);
+            }
 
-                // DEPSEC-P002 cross-line: base64 decode + exec/require in same file
-                if !ignored_rules.contains(&"DEPSEC-P002") {
-                    let already_has_p002 = findings.iter().any(|f| {
-                        f.rule_id == "DEPSEC-P002" && f.file.as_deref() == Some(&rel_path)
-                    });
-                    if !already_has_p002 {
-                        check_cross_line_decode_exec(&content, &rel_path, &mut findings);
-                    }
+            // DEPSEC-P002 cross-line: base64 decode + exec/require in same file
+            if !ignored_rules.contains(&"DEPSEC-P002") {
+                let already_has_p002 = findings
+                    .iter()
+                    .any(|f| f.rule_id == "DEPSEC-P002" && f.file.as_deref() == Some(&rel_path));
+                if !already_has_p002 {
+                    check_cross_line_decode_exec(&content, &rel_path, &mut findings);
                 }
             }
         }
@@ -541,7 +568,7 @@ impl Check for PatternsCheck {
 
         // DEPSEC-P025: WebAssembly binary presence in packages
         if !ignored_rules.contains(&"DEPSEC-P025") {
-            check_wasm_presence(ctx.root, &mut findings);
+            check_wasm_presence(ctx.root, &lock_packages, &mut findings);
         }
 
         // Signal combination: escalate findings when multiple weak signals co-occur
@@ -779,6 +806,7 @@ fn is_scannable_file(name: &str) -> bool {
     )
 }
 
+#[cfg(test)]
 fn is_binary_ext(path: &Path) -> bool {
     match path.extension().and_then(|e| e.to_str()) {
         Some(ext) => {
@@ -791,6 +819,7 @@ fn is_binary_ext(path: &Path) -> bool {
     }
 }
 
+#[cfg(test)]
 fn is_skip_ext(path: &Path) -> bool {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     // Check compound extensions like .d.ts, .d.ts.map
@@ -801,6 +830,7 @@ fn should_skip_dir(name: &str) -> bool {
     SKIP_DIR_NAMES.contains(&name)
 }
 
+#[cfg(test)]
 fn is_skip_filename(path: &Path) -> bool {
     let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     SKIP_FILENAMES.contains(&name)
@@ -849,15 +879,31 @@ fn shannon_entropy(s: &str) -> f64 {
 /// DEPSEC-P025: Detect WebAssembly binary presence in dependency packages.
 /// WASM in npm packages is unusual and often malicious (CrowdStrike: 75% of WASM in the wild is malicious).
 /// No other supply chain scanner inspects WASM contents — detecting presence alone is valuable.
-fn check_wasm_presence(root: &Path, findings: &mut Vec<Finding>) {
-    for dep_dir_name in DEP_DIRS {
-        let dep_dir = root.join(dep_dir_name);
-        if !dep_dir.exists() {
-            continue;
-        }
+fn check_wasm_presence(
+    root: &Path,
+    lock_packages: &[crate::scan_cache::LockPackage],
+    findings: &mut Vec<Finding>,
+) {
+    // Collect directories to walk: lockfile package dirs (fast) or full dep dirs (fallback)
+    let dirs_to_walk: Vec<std::path::PathBuf> = if !lock_packages.is_empty() {
+        lock_packages
+            .iter()
+            .filter_map(|pkg| pkg.dir_path.as_ref().map(|dp| root.join(dp)))
+            .filter(|p| p.exists())
+            .collect()
+    } else {
+        DEP_DIRS
+            .iter()
+            .map(|d| root.join(d))
+            .filter(|p| p.exists())
+            .collect()
+    };
 
-        for entry in WalkDir::new(&dep_dir)
-            .max_depth(10)
+    let max_depth = if lock_packages.is_empty() { 10 } else { 5 };
+
+    for dir in &dirs_to_walk {
+        for entry in WalkDir::new(dir)
+            .max_depth(max_depth)
             .into_iter()
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().is_file())

@@ -12,6 +12,10 @@ pub struct LockPackage {
     pub name: String,
     pub version: String,
     pub integrity: String, // SHA-512 for npm, checksum for Cargo, version for Gemfile
+    /// Filesystem path relative to project root (e.g., "node_modules/lodash",
+    /// "node_modules/@babel/core", "node_modules/express/node_modules/qs").
+    /// Used by the lockfile-driven scanner to walk per-package instead of the entire dep tree.
+    pub dir_path: Option<String>,
 }
 
 /// Cache of previously scanned packages
@@ -126,6 +130,7 @@ pub fn parse_npm_lockfile(root: &Path) -> Vec<LockPackage> {
                     name: name.to_string(),
                     version,
                     integrity,
+                    dir_path: Some(path.clone()), // v3 key IS the fs path
                 });
             }
         }
@@ -162,6 +167,7 @@ fn parse_npm_v1_deps(
                 name: name.clone(),
                 version,
                 integrity,
+                dir_path: Some(format!("node_modules/{name}")),
             });
         }
 
@@ -210,6 +216,7 @@ pub fn parse_cargo_lockfile(root: &Path) -> Vec<LockPackage> {
                     name,
                     version,
                     integrity: checksum,
+                    dir_path: None, // Cargo deps are in ~/.cargo/registry, not project dir
                 });
             }
         }
@@ -249,8 +256,9 @@ pub fn parse_gemfile_lockfile(root: &Path) -> Vec<LockPackage> {
                         .to_string();
                     if !name.is_empty() && !version.is_empty() {
                         packages.push(LockPackage {
-                            name,
+                            name: name.clone(),
                             integrity: version.clone(), // Use version as integrity
+                            dir_path: None,             // Resolved at scan time from vendor/bundle
                             version,
                         });
                     }
@@ -284,30 +292,6 @@ pub fn parse_lockfile(root: &Path) -> Vec<LockPackage> {
     vec![]
 }
 
-/// Get the set of package names that need scanning (for use in the patterns check)
-pub fn get_packages_to_scan(root: &Path) -> Option<HashSet<String>> {
-    let lock_packages = parse_lockfile(root);
-    if lock_packages.is_empty() {
-        return None; // No lock file — can't use cache
-    }
-
-    let cache = ScanCache::load(root);
-    let to_scan = cache.packages_to_scan(&lock_packages);
-
-    if to_scan.is_empty() && !cache.scanned.is_empty() {
-        // Everything is cached — nothing to scan
-        return Some(HashSet::new());
-    }
-
-    if to_scan.len() == lock_packages.len() {
-        // First scan or all packages changed — scan everything
-        return None;
-    }
-
-    // Only scan the delta
-    Some(to_scan.iter().map(|p| p.name.clone()).collect())
-}
-
 /// Update the cache after a scan completes
 pub fn update_cache(root: &Path) {
     let lock_packages = parse_lockfile(root);
@@ -333,11 +317,13 @@ mod tests {
                 name: "lodash".into(),
                 version: "4.17.21".into(),
                 integrity: "sha512-abc".into(),
+                dir_path: None,
             },
             LockPackage {
                 name: "express".into(),
                 version: "4.18.2".into(),
                 integrity: "sha512-def".into(),
+                dir_path: None,
             },
         ];
 
@@ -357,11 +343,13 @@ mod tests {
                 name: "lodash".into(),
                 version: "4.17.21".into(),
                 integrity: "sha512-abc".into(),
+                dir_path: None,
             },
             LockPackage {
                 name: "express".into(),
                 version: "4.18.2".into(),
                 integrity: "sha512-def".into(),
+                dir_path: None,
             },
         ];
 
@@ -380,6 +368,7 @@ mod tests {
             name: "lodash".into(),
             version: "4.17.21".into(),
             integrity: "sha512-abc".into(),
+            dir_path: None,
         }];
         cache.mark_scanned(&original);
 
@@ -388,6 +377,7 @@ mod tests {
             name: "lodash".into(),
             version: "4.17.21".into(),
             integrity: "sha512-DIFFERENT".into(),
+            dir_path: None,
         }];
 
         let to_scan = cache.packages_to_scan(&updated);
@@ -401,6 +391,7 @@ mod tests {
             name: "lodash".into(),
             version: "4.17.21".into(),
             integrity: "sha512-abc".into(),
+            dir_path: None,
         }]);
 
         let packages = vec![
@@ -408,11 +399,13 @@ mod tests {
                 name: "lodash".into(),
                 version: "4.17.21".into(),
                 integrity: "sha512-abc".into(),
+                dir_path: None,
             },
             LockPackage {
                 name: "evil-package".into(),
                 version: "1.0.0".into(),
                 integrity: "sha512-evil".into(),
+                dir_path: None,
             },
         ];
 
@@ -429,11 +422,13 @@ mod tests {
                 name: "lodash".into(),
                 version: "4.17.21".into(),
                 integrity: "sha512-abc".into(),
+                dir_path: None,
             },
             LockPackage {
                 name: "removed-pkg".into(),
                 version: "1.0.0".into(),
                 integrity: "sha512-old".into(),
+                dir_path: None,
             },
         ]);
 
@@ -442,6 +437,7 @@ mod tests {
             name: "lodash".into(),
             version: "4.17.21".into(),
             integrity: "sha512-abc".into(),
+            dir_path: None,
         }];
 
         cache.prune(&current);
