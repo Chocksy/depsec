@@ -195,6 +195,67 @@ One gap remaining = **97% detection rate**.
 - Louvain community detection for scatter attack visibility
 - [ScienceDirect: SNA metrics on call graphs](https://www.sciencedirect.com/science/article/abs/pii/S0164121215001259)
 
+## Execution Status (as of 2026-04-03)
+
+### Sprint 1: COMPLETE (13/13 vectors closed — 45.9% → 78.4%)
+All quick fixes and AST extensions shipped across 4 commits.
+
+### Sprint 2: MOSTLY COMPLETE (78.4% → 81.1%)
+- [x] credential_read cross-file bug fix
+- [x] Package-level signal combination (COMBO-001/002/003)
+- [x] E14 chained require().exec()
+- [x] E22 Python alias resolution
+- [ ] Import graph module (deferred — Layer 1 capability aggregation was sufficient)
+
+### Sprint 3: PARTIALLY COMPLETE (83.8% → 86.5%)
+- [x] global.require alias chain tracking
+- [x] Line-level string concat resolution
+- [ ] Cross-line const propagation (E01, E10) — needs AST symbol table
+
+### Sprint 4: PHASE A COMPLETE (86.5%)
+- [x] WASM presence detection (P025)
+- [ ] Import/export capability analysis
+- [ ] Behavioral heuristics
+
+### Current: 32/37 (86.5%) — 5 remaining gaps
+- E01, E10: cross-line const propagation
+- E02: Proxy wrap (runtime only)
+- E12: JSON payload cross-file data flow
+- E14: defineProperty getter body
+
+## Sprint 5: Definitive Protect Mode (NEW — 2026-04-03)
+
+**The critical insight**: Detection without precision is noise. 3,254 findings on POS
+is useless. `depsec protect` must be BINARY: ✓ clean or ✗ BLOCKED.
+
+### The Problem
+- POS scan: 3,254 findings → nobody reads this
+- CEMS scan: 1,355 findings → noise
+- `depsec protect npm install` should show 0-2 actionable alerts, not thousands
+
+### The Pipeline
+```
+Static scan → 3,000 raw signals
+  → Confidence filter (Critical/High + High confidence only) → 15-20
+  → Package verdict (known-good allowlist, build tool recognition) → 0-3
+  → (Future) LLM triage → 0-1 definitive blocks
+  → OUTPUT: ✓ clean OR ✗ BLOCKED: reason
+```
+
+### Key Design Principles
+1. **`scan` mode = audit** (all findings, for security teams)
+2. **`protect` mode = seatbelt** (binary verdict only, for developers)
+3. **Known-good packages are silenced** (esbuild, playwright, typescript do build-tool things)
+4. **Only definitively suspicious patterns block** (credential exfil + network, not just eval())
+5. **LLM is the last resort** (sends top 2-3 suspects for final verdict)
+
+### What Needs to Change
+- Protect mode applies aggressive confidence + severity filter
+- Built-in allowlist for well-known build tools (esbuild, webpack, vite, etc.)
+- Package popularity/download count as a trust signal
+- `depsec protect` output: single line ✓/✗, not a report
+
 ## Next Steps
 
-→ `/workflows:plan` for Sprint 1 implementation details
+→ `/workflows:plan` for Sprint 5: Definitive Protect Mode
+→ Then: Sprint 3 remainder (const propagation), Sprint 4 remainder (WASM deep analysis)
