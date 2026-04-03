@@ -224,6 +224,9 @@ pub fn run(root: &Path, opts: &ScanOpts) -> ExitCode {
                 !visible_findings.is_empty()
             };
 
+            // Update scan cache — mark all packages as scanned for next run
+            crate::scan_cache::update_cache(root);
+
             if has_issues {
                 ExitCode::from(1)
             } else {

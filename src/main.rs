@@ -21,6 +21,7 @@ mod rules;
 
 mod sandbox;
 mod sarif;
+mod scan_cache;
 mod scanner;
 mod scorecard;
 mod scoring;

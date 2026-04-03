@@ -259,6 +259,21 @@ impl Check for PatternsCheck {
         let mut pass_messages = Vec::new();
         let mut ast_analyzer = AstAnalyzer::new();
 
+        // Lock file-based caching: only scan new/changed packages
+        let packages_to_scan = crate::scan_cache::get_packages_to_scan(ctx.root);
+        let using_cache = packages_to_scan.is_some();
+        if let Some(ref pkgs) = packages_to_scan {
+            if pkgs.is_empty() {
+                pass_messages.push("All packages cached — no changes since last scan".into());
+                return Ok(CheckResult::new(
+                    self.name().to_string(),
+                    findings,
+                    10.0,
+                    pass_messages,
+                ));
+            }
+        }
+
         // Scan dependency directories
         for dep_dir_name in DEP_DIRS {
             let dep_dir = ctx.root.join(dep_dir_name);
@@ -267,18 +282,46 @@ impl Check for PatternsCheck {
             }
 
             let extra_skip_dirs = &ctx.config.patterns.skip_dirs;
+            let cache_pkgs = packages_to_scan.clone();
             for entry in WalkDir::new(&dep_dir)
                 .follow_links(false)
                 .max_depth(7)
                 .into_iter()
-                .filter_entry(|e| {
+                .filter_entry(move |e| {
                     if e.file_type().is_dir() {
                         let name = e.file_name().to_str().unwrap_or("");
-                        return !should_skip_dir(name)
-                            && !extra_skip_dirs.iter().any(|d| d == name);
+
+                        // Skip known noise directories
+                        if should_skip_dir(name) || extra_skip_dirs.iter().any(|d| d == name) {
+                            return false;
+                        }
+
+                        // Skip ENTIRE package directories if they're cached
+                        // This is the key optimization: prune the entire subtree
+                        if let Some(ref pkgs) = cache_pkgs {
+                            // Check if this directory is a package dir inside a dep dir
+                            // e.g., node_modules/lodash or node_modules/@scope/name
+                            let path = e.path();
+                            if let Ok(rel) = path.strip_prefix(ctx.root) {
+                                let rel_str = rel.to_string_lossy();
+                                if let Some(pkg_name) = extract_package_name(&rel_str) {
+                                    // Only skip if the current dir IS the package root
+                                    // (not a subdirectory within a package we're scanning)
+                                    let expected_dir = if pkg_name.starts_with('@') {
+                                        format!("{dep_dir_name}/{pkg_name}")
+                                    } else {
+                                        format!("{dep_dir_name}/{pkg_name}")
+                                    };
+                                    if rel_str == expected_dir && !pkgs.contains(&pkg_name) {
+                                        return false; // Skip this entire package tree
+                                    }
+                                }
+                            }
+                        }
+
+                        return true;
                     }
-                    // For files: pre-filter by extension in the walker itself
-                    // This avoids stat() and read() on non-code files entirely
+                    // For files: pre-filter by extension
                     let name = e.file_name().to_str().unwrap_or("");
                     is_scannable_file(name)
                 })
@@ -286,6 +329,21 @@ impl Check for PatternsCheck {
                 .filter(|e| e.file_type().is_file())
             {
                 let path = entry.path();
+
+                // Skip files from cached (already-scanned) packages
+                if using_cache {
+                    if let Some(ref pkgs) = packages_to_scan {
+                        let rel = path
+                            .strip_prefix(ctx.root)
+                            .unwrap_or(path)
+                            .to_string_lossy();
+                        if let Some(pkg_name) = extract_package_name(&rel) {
+                            if !pkgs.contains(&pkg_name) {
+                                continue; // Package hasn't changed — skip
+                            }
+                        }
+                    }
+                }
 
                 // For large files, sample first+last 50KB instead of skipping entirely.
                 // Attackers can hide malicious code in >500KB bundles to evade scanners.
