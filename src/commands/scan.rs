@@ -12,6 +12,7 @@ pub struct ScanOpts<'a> {
     pub verbose: bool,
     pub triage: bool,
     pub triage_dry_run: bool,
+    pub no_triage: bool,
     pub color: bool,
     pub full: bool,
 }
@@ -46,11 +47,7 @@ pub fn run(root: &Path, opts: &ScanOpts) -> ExitCode {
             for result in &mut report.results {
                 for finding in &mut result.findings {
                     if let Some(pkg) = &finding.package {
-                        // Extract package name, handling scoped packages and @version suffix
-                        // "lodash@4.17.21" -> "lodash"
-                        // "@scope/name@1.0.0" -> "@scope/name"
                         let pkg_name = if let Some(rest) = pkg.strip_prefix('@') {
-                            // Scoped: find the second @ (version separator)
                             match rest.find('@') {
                                 Some(pos) => &pkg[..pos + 1],
                                 None => pkg.as_str(),
@@ -61,9 +58,6 @@ pub fn run(root: &Path, opts: &ScanOpts) -> ExitCode {
 
                         let is_imported = app_imports.packages.contains(pkg_name);
                         let is_dev = categories.dev.contains(pkg_name);
-
-                        // reachable=true means: runtime dep imported by app
-                        // reachable=false means: dev dep, build tool, or not imported
                         finding.reachable = Some(is_imported && !is_dev);
                     }
                 }
@@ -72,7 +66,6 @@ pub fn run(root: &Path, opts: &ScanOpts) -> ExitCode {
                 if result.category == "capabilities" {
                     for finding in &mut result.findings {
                         if finding.reachable == Some(false) {
-                            // Downgrade build-tool capability severity by 1-2 levels
                             finding.severity = match finding.severity {
                                 crate::checks::Severity::Critical => {
                                     crate::checks::Severity::Medium
@@ -80,7 +73,6 @@ pub fn run(root: &Path, opts: &ScanOpts) -> ExitCode {
                                 crate::checks::Severity::High => crate::checks::Severity::Low,
                                 _ => crate::checks::Severity::Low,
                             };
-                            // Soften messaging for build tools
                             if let Some(ref mut suggestion) = finding.suggestion {
                                 if suggestion.contains("Remove immediately") {
                                     *suggestion = suggestion.replace(
@@ -94,6 +86,69 @@ pub fn run(root: &Path, opts: &ScanOpts) -> ExitCode {
                 }
             }
 
+            // --- LLM Triage: default ON when API key available ---
+            // Determines whether to run LLM triage before rendering output.
+            // Priority: --no-triage disables, --triage forces, otherwise auto-detect API key.
+            let llm_client: Option<Box<dyn LlmApi>> = if opts.no_triage {
+                None
+            } else if opts.triage || opts.triage_dry_run {
+                // Explicitly requested
+                match llm::LlmClient::from_config(&config.triage) {
+                    Some(c) => Some(Box::new(c)),
+                    None => {
+                        if !opts.triage_dry_run {
+                            llm::print_setup_instructions();
+                        }
+                        None
+                    }
+                }
+            } else {
+                // Auto-detect: silently check if API key is available
+                llm::LlmClient::from_config(&config.triage).map(|c| Box::new(c) as Box<dyn LlmApi>)
+            };
+
+            // Collect visible findings for triage
+            let visible_findings: Vec<crate::checks::Finding> = report
+                .results
+                .iter()
+                .flat_map(|r| &r.findings)
+                .filter(|f| opts.verbose || output::finding_visible(f, opts.persona))
+                .cloned()
+                .collect();
+
+            // Run triage if client available and findings exist
+            let triage_results = if opts.triage_dry_run && !visible_findings.is_empty() {
+                triage::dry_run_findings(&visible_findings, root, &config.triage);
+                vec![]
+            } else if let Some(ref client) = llm_client {
+                if visible_findings.is_empty() {
+                    vec![]
+                } else {
+                    let est_tokens = visible_findings.len() as u32 * 2000;
+                    let est_cost =
+                        client.estimate_cost(est_tokens, visible_findings.len() as u32 * 200);
+
+                    if is_human {
+                        eprintln!(
+                            "Triaging {} findings with {} (~${:.4})...\n",
+                            visible_findings.len(),
+                            client.model(),
+                            est_cost,
+                        );
+                    }
+
+                    triage::triage_findings(
+                        &visible_findings,
+                        root,
+                        client.as_ref(),
+                        &config.triage,
+                    )
+                }
+            } else {
+                vec![]
+            };
+
+            // --- Render output ---
             let fmt = opts
                 .format
                 .unwrap_or(if opts.json { "json" } else { "human" });
@@ -114,72 +169,54 @@ pub fn run(root: &Path, opts: &ScanOpts) -> ExitCode {
                 },
                 _ => {
                     if opts.full || opts.verbose {
-                        // --full or --verbose: detailed category-by-category output
                         print!(
                             "{}",
                             output::render_human(&report, opts.color, opts.persona, opts.verbose)
                         );
                     } else {
-                        // Default: executive summary
                         print!(
                             "{}",
                             output::render_executive(&report, opts.color, opts.persona,)
                         );
                     }
+
+                    // Show triage results inline (if we have them)
+                    if !triage_results.is_empty() {
+                        print!(
+                            "{}",
+                            triage::render_triage_results(
+                                &visible_findings,
+                                &triage_results,
+                                opts.color
+                            )
+                        );
+                    } else if llm_client.is_none()
+                        && !opts.no_triage
+                        && !visible_findings.is_empty()
+                        && is_human
+                    {
+                        // No API key available — hint to user
+                        eprintln!(
+                            "\n\x1b[2mTip: Set OPENROUTER_API_KEY for AI-powered definitive verdicts\x1b[0m"
+                        );
+                    }
                 }
             }
 
-            // LLM triage (optional)
-            if opts.triage || opts.triage_dry_run {
-                let visible_findings: Vec<crate::checks::Finding> = report
-                    .results
-                    .iter()
-                    .flat_map(|r| &r.findings)
-                    .filter(|f| opts.verbose || output::finding_visible(f, opts.persona))
-                    .cloned()
-                    .collect();
+            // --- Exit code ---
+            // With triage: only True Positives count as issues
+            // Without triage: any visible finding counts (existing behavior)
+            let has_issues = if !triage_results.is_empty() {
+                // LLM triaged: only TP findings are real issues
+                triage_results.iter().any(|(_, result, _)| {
+                    matches!(result.classification, triage::Classification::TruePositive)
+                })
+            } else {
+                // Static-only: any visible finding
+                !visible_findings.is_empty()
+            };
 
-                if visible_findings.is_empty() {
-                    eprintln!("No findings to triage.");
-                } else if opts.triage_dry_run {
-                    triage::dry_run_findings(&visible_findings, root, &config.triage);
-                } else {
-                    let client = match llm::LlmClient::from_config(&config.triage) {
-                        Some(c) => c,
-                        None => {
-                            llm::print_setup_instructions();
-                            return ExitCode::from(2);
-                        }
-                    };
-
-                    let est_tokens = visible_findings.len() as u32 * 2000;
-                    let est_cost =
-                        client.estimate_cost(est_tokens, visible_findings.len() as u32 * 200);
-                    eprintln!(
-                        "\nTriaging {} findings with {} (~${:.4} estimated)...\n",
-                        visible_findings.len(),
-                        client.model(),
-                        est_cost,
-                    );
-
-                    let results =
-                        triage::triage_findings(&visible_findings, root, &client, &config.triage);
-
-                    print!(
-                        "{}",
-                        triage::render_triage_results(&visible_findings, &results, opts.color)
-                    );
-                }
-            }
-
-            // Exit code respects persona
-            let has_visible_findings = report.results.iter().any(|r| {
-                r.findings
-                    .iter()
-                    .any(|f| opts.verbose || output::finding_visible(f, opts.persona))
-            });
-
-            if has_visible_findings {
+            if has_issues {
                 ExitCode::from(1)
             } else {
                 ExitCode::SUCCESS

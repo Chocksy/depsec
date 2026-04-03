@@ -94,6 +94,9 @@ enum Commands {
         /// Show what would be sent to LLM
         #[arg(long)]
         triage_dry_run: bool,
+        /// Skip LLM triage even if API key is available
+        #[arg(long)]
+        no_triage: bool,
         /// Only check staged files (for pre-commit hook)
         #[arg(long)]
         staged: bool,
@@ -363,6 +366,7 @@ fn main() -> ExitCode {
             verbose,
             triage,
             triage_dry_run,
+            no_triage,
             staged,
         } => {
             // --staged mode: check staged files for secrets (pre-commit hook)
@@ -394,6 +398,7 @@ fn main() -> ExitCode {
                     verbose,
                     triage,
                     triage_dry_run,
+                    no_triage,
                     color,
                     full,
                 },
