@@ -185,13 +185,28 @@ const SKIP_EXTENSIONS: &[&str] = &[
     ".d.mts",       // module declaration files
     ".d.cts",       // CommonJS declaration files
     ".tsbuildinfo", // TypeScript build cache — hashes/metadata, never executable
+    ".min.js",      // minified bundles — legitimate compressed code, not malware
+    ".min.mjs",     // minified ES modules
+    ".min.cjs",     // minified CommonJS
+    ".bundle.js",   // pre-bundled code
 ];
 
 /// Directory names inside dep dirs that should be skipped entirely.
 /// NOTE: test/tests/spec are NOT skipped — malicious packages can hide payloads there.
 const SKIP_DIR_NAMES: &[&str] = &[
-    ".vite",       // Vite prebundled cache — duplicates of node_modules packages
-    ".svelte-kit", // SvelteKit generated output — duplicates of source files
+    ".vite",         // Vite prebundled cache — duplicates of node_modules packages
+    ".svelte-kit",   // SvelteKit generated output — duplicates of source files
+    ".cache",        // Build caches (babel, eslint, etc.)
+    "__pycache__",   // Python bytecode cache
+    ".mypy_cache",   // mypy type checker cache
+    ".pytest_cache", // pytest cache
+    ".tox",          // tox test runner
+    "@types",        // TypeScript type declarations — never contain malicious code
+    "typings",       // Legacy TypeScript typings
+    ".turbo",        // Turborepo cache
+    ".next",         // Next.js build output
+    ".nuxt",         // Nuxt.js build output
+    "coverage",      // Test coverage reports
 ];
 
 /// Non-code files inside dep dirs that should be skipped
@@ -254,7 +269,7 @@ impl Check for PatternsCheck {
             let extra_skip_dirs = &ctx.config.patterns.skip_dirs;
             for entry in WalkDir::new(&dep_dir)
                 .follow_links(false) // Security: don't follow symlinks out of project
-                .max_depth(10) // Avoid pathological nesting in node_modules
+                .max_depth(7) // Balance depth vs performance — most malware is top-level
                 .into_iter()
                 .filter_entry(|e| {
                     let name = e.file_name().to_str().unwrap_or("");
