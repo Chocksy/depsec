@@ -205,17 +205,19 @@ All 13 vectors closed across 4 commits:
 - [x] 7 JS AST extensions (mainModule.require, (0,require), global.Function, etc.)
 - [x] Reflect.apply detection
 
-### Sprint 2: MOSTLY COMPLETE (78.4% → 83.8%)
+### Sprint 2: COMPLETE (78.4% → 83.8%)
 - [x] credential_read cross-file bug fix (two-pass scan_package)
 - [x] Package-level signal combination (COMBO-001/002/003)
 - [x] E14 chained require().exec()
 - [x] E22 Python alias resolution
+- [x] E12 JSON payload detection (AST eval() with dynamic args)
 - [ ] Import graph module (deferred — Layer 1 capability aggregation sufficient)
 
-### Sprint 3: PARTIALLY COMPLETE (83.8% → 86.5%)
+### Sprint 3: COMPLETE (83.8% → 97.3%)
 - [x] global.require alias chain tracking
 - [x] Line-level string concat resolution
-- [ ] Cross-line const propagation (E01, E10) — needs AST symbol table
+- [x] Cross-line const propagation (E01, E10) — AST symbol table + bracket access resolution
+- [x] E14 getter body — chained require().exec() detection
 
 ### Sprint 4: PHASE A COMPLETE
 - [x] WASM presence detection (P025) — first-in-market
@@ -238,8 +240,8 @@ All 13 vectors closed across 4 commits:
 - [x] Directory-level pruning for cached packages
 - [x] **CRITICAL: Lockfile-driven scanner** (Phase 1+2 complete)
 
-### Detection: 32/37 (86.5%)
-5 remaining gaps: E01, E10 (const propagation), E02 (Proxy — runtime), E12 (JSON cross-file), E14 (getter body)
+### Detection: 36/37 (97.3%)
+1 remaining gap: E02 (Proxy wrapping — requires runtime analysis, intentionally unsolvable statically)
 
 ### Real-world validation:
 - Planted malicious Python package in CEMS → all 3 techniques detected (P021+P024+P003)
