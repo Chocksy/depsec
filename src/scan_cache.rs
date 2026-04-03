@@ -270,26 +270,252 @@ pub fn parse_gemfile_lockfile(root: &Path) -> Vec<LockPackage> {
     packages
 }
 
-/// Detect and parse any available lock file in the project
+/// Parse a pnpm-lock.yaml file (line-based, no YAML crate needed).
+/// pnpm v9 format: `packages:` section with `'<name>@<version>':` entries.
+/// pnpm uses node_modules/<name> symlinks, so dir_path is the same as npm.
+pub fn parse_pnpm_lockfile(root: &Path) -> Vec<LockPackage> {
+    let lock_path = root.join("pnpm-lock.yaml");
+    let content = match std::fs::read_to_string(&lock_path) {
+        Ok(c) => c,
+        Err(_) => return vec![],
+    };
+
+    let mut packages = Vec::new();
+    let mut in_packages = false;
+
+    for line in content.lines() {
+        if line == "packages:" {
+            in_packages = true;
+            continue;
+        }
+        // Sections end when a non-indented line appears
+        if in_packages && !line.starts_with(' ') && !line.is_empty() {
+            in_packages = false;
+        }
+        if !in_packages {
+            continue;
+        }
+
+        // Match: "  '@scope/name@version':" or "  'name@version':"
+        let trimmed = line.trim();
+        if !trimmed.ends_with(':') {
+            continue;
+        }
+        let entry = trimmed
+            .trim_start_matches('\'')
+            .trim_end_matches(':')
+            .trim_end_matches('\'');
+
+        // Split on last '@' to separate name from version
+        // Handle scoped: @scope/name@version → split after the second @
+        let (name, version) = if let Some(rest) = entry.strip_prefix('@') {
+            // Scoped package: find the @ after the scope
+            if let Some(pos) = rest.rfind('@') {
+                (&entry[..pos + 1], &rest[pos + 1..])
+            } else {
+                continue;
+            }
+        } else if let Some(pos) = entry.rfind('@') {
+            (&entry[..pos], &entry[pos + 1..])
+        } else {
+            continue;
+        };
+
+        if !name.is_empty() && !version.is_empty() {
+            packages.push(LockPackage {
+                name: name.to_string(),
+                version: version.to_string(),
+                integrity: version.to_string(), // pnpm has integrity but it's nested; use version for cache
+                dir_path: Some(format!("node_modules/{name}")),
+            });
+        }
+    }
+
+    packages
+}
+
+/// Parse a yarn.lock v1 file.
+/// Format: `"name@range":\n  version "X.Y.Z"\n  integrity sha512-...`
+pub fn parse_yarn_lockfile(root: &Path) -> Vec<LockPackage> {
+    let lock_path = root.join("yarn.lock");
+    let content = match std::fs::read_to_string(&lock_path) {
+        Ok(c) => c,
+        Err(_) => return vec![],
+    };
+
+    let mut packages = Vec::new();
+    let mut current_name: Option<String> = None;
+    let mut current_version = String::new();
+    let mut current_integrity = String::new();
+
+    for line in content.lines() {
+        if line.starts_with('#') || line.is_empty() {
+            continue;
+        }
+
+        // Package header: "name@range:" or "name@range, name@range:"
+        if !line.starts_with(' ') && line.ends_with(':') {
+            // Flush previous package
+            if let Some(ref name) = current_name {
+                if !current_version.is_empty() {
+                    packages.push(LockPackage {
+                        name: name.clone(),
+                        version: current_version.clone(),
+                        integrity: if current_integrity.is_empty() {
+                            current_version.clone()
+                        } else {
+                            current_integrity.clone()
+                        },
+                        dir_path: Some(format!("node_modules/{name}")),
+                    });
+                }
+            }
+
+            // Parse new package name from header
+            let header = line.trim_end_matches(':');
+            // Take first entry before comma: "name@^1.0.0, name@~1.0.0" → "name@^1.0.0"
+            let first_entry = header.split(',').next().unwrap_or(header).trim();
+            let entry = first_entry.trim_matches('"');
+
+            // Extract name: split on last @ (handle scoped packages)
+            let name = if let Some(rest) = entry.strip_prefix('@') {
+                // @scope/name@range
+                rest.find('@').map(|pos| entry[..pos + 1].to_string())
+            } else {
+                entry.find('@').map(|pos| entry[..pos].to_string())
+            };
+
+            current_name = name;
+            current_version.clear();
+            current_integrity.clear();
+        } else if line.starts_with("  version ") {
+            current_version = line
+                .trim_start_matches("  version ")
+                .trim_matches('"')
+                .to_string();
+        } else if line.starts_with("  integrity ") {
+            current_integrity = line
+                .trim_start_matches("  integrity ")
+                .trim_matches('"')
+                .to_string();
+        }
+    }
+
+    // Flush last package
+    if let Some(name) = current_name {
+        if !current_version.is_empty() {
+            packages.push(LockPackage {
+                name: name.clone(),
+                version: current_version.clone(),
+                integrity: if current_integrity.is_empty() {
+                    current_version
+                } else {
+                    current_integrity
+                },
+                dir_path: Some(format!("node_modules/{name}")),
+            });
+        }
+    }
+
+    packages
+}
+
+/// Parse a Python requirements.txt for package names.
+/// Detects the venv's Python version to construct correct site-packages path.
+pub fn parse_pip_requirements(root: &Path) -> Vec<LockPackage> {
+    let req_path = root.join("requirements.txt");
+    let content = match std::fs::read_to_string(&req_path) {
+        Ok(c) => c,
+        Err(_) => return vec![],
+    };
+
+    // Detect venv Python version for dir_path
+    let venv_dir = if root.join(".venv").exists() {
+        Some(root.join(".venv"))
+    } else if root.join("venv").exists() {
+        Some(root.join("venv"))
+    } else {
+        None
+    };
+
+    let python_version = venv_dir.as_ref().and_then(|venv| {
+        std::fs::read_dir(venv.join("lib"))
+            .ok()?
+            .filter_map(|e| e.ok())
+            .find(|e| {
+                e.file_name()
+                    .to_str()
+                    .is_some_and(|n| n.starts_with("python"))
+            })
+            .and_then(|e| e.file_name().into_string().ok())
+    });
+
+    let mut packages = Vec::new();
+
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with('-') {
+            continue;
+        }
+
+        // Parse: "package==1.0.0", "package>=1.0", "package", "package[extra]>=1.0"
+        let name_end = line
+            .find(['=', '>', '<', '!', '[', ';'])
+            .unwrap_or(line.len());
+        let raw_name = line[..name_end].trim();
+        if raw_name.is_empty() {
+            continue;
+        }
+
+        // Normalize: PEP 503 — hyphens → underscores, lowercase
+        let normalized = raw_name.replace('-', "_").to_lowercase();
+
+        // Extract version if pinned (==)
+        let version = if let Some(pos) = line.find("==") {
+            let rest = &line[pos + 2..];
+            let ver_end = rest.find([',', ';', ' ', '#']).unwrap_or(rest.len());
+            rest[..ver_end].trim().to_string()
+        } else {
+            "latest".to_string()
+        };
+
+        // Construct dir_path from venv
+        let dir_path = python_version.as_ref().and_then(|pyver| {
+            let venv = venv_dir.as_ref()?;
+            let sp = venv.join("lib").join(pyver).join("site-packages");
+            // Try exact match first, then case-insensitive
+            let pkg_dir = sp.join(&normalized);
+            if pkg_dir.exists() {
+                let rel = pkg_dir.strip_prefix(root).ok()?;
+                return Some(rel.to_string_lossy().to_string());
+            }
+            None
+        });
+
+        packages.push(LockPackage {
+            name: raw_name.to_string(),
+            version: version.clone(),
+            integrity: version,
+            dir_path,
+        });
+    }
+
+    packages
+}
+
+/// Detect and parse all available lock files in the project.
+/// Returns packages from ALL lockfiles combined (a project may have both npm + pip).
 pub fn parse_lockfile(root: &Path) -> Vec<LockPackage> {
-    // Try each lock file in order of priority
-    let npm = parse_npm_lockfile(root);
-    if !npm.is_empty() {
-        return npm;
-    }
+    let mut packages = Vec::new();
 
-    let cargo = parse_cargo_lockfile(root);
-    if !cargo.is_empty() {
-        return cargo;
-    }
+    packages.extend(parse_npm_lockfile(root));
+    packages.extend(parse_pnpm_lockfile(root));
+    packages.extend(parse_yarn_lockfile(root));
+    packages.extend(parse_cargo_lockfile(root));
+    packages.extend(parse_gemfile_lockfile(root));
+    packages.extend(parse_pip_requirements(root));
 
-    let gemfile = parse_gemfile_lockfile(root);
-    if !gemfile.is_empty() {
-        return gemfile;
-    }
-
-    // No lock file found — fall back to full scan
-    vec![]
+    packages
 }
 
 /// Update the cache after a scan completes
