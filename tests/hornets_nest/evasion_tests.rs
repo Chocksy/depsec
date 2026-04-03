@@ -153,7 +153,7 @@ pub fn run_all() -> Vec<VectorResult> {
             name: "hn-json-payload",
             layer: Layer::StaticScan,
             technique: "Payload in JSON loaded at runtime",
-            expected: Expected::Miss,
+            expected: Expected::Detect, // AST detects eval(config.cmd) as eval with dynamic arg
             test_fn: test_json_payload,
         },
         EvasionTest {

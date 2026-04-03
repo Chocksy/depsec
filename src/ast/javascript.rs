@@ -53,6 +53,9 @@ pub fn analyze(parser: &mut Parser, source: &str) -> Vec<AstFinding> {
     // Detect chained calls: require('child_process').exec('cmd')
     find_chained_require_calls(&tree, source_bytes, &mut findings);
 
+    // Detect eval() with non-literal arguments (P001)
+    find_eval_calls(&tree, source_bytes, &mut findings);
+
     // Const propagation: resolve cross-line string assignments and detect
     // bracket-access calls like obj[variable]() where variable resolves to a dangerous name
     let const_table = build_const_table(&tree, source_bytes);
@@ -1381,6 +1384,60 @@ fn find_const_propagated_dangers(
                 line,
             });
         }
+    }
+}
+
+/// Detect standalone eval() calls with non-literal arguments (P001).
+/// The regex P001 is suppressed for AST-analyzed JS files, so the AST must catch eval.
+fn find_eval_calls(tree: &tree_sitter::Tree, source: &[u8], findings: &mut Vec<AstFinding>) {
+    let query = Query::new(
+        &tree.language(),
+        r#"
+        (call_expression
+          function: (identifier) @fn
+          arguments: (arguments (_) @arg)
+          (#eq? @fn "eval"))
+        "#,
+    );
+
+    let Ok(query) = query else { return };
+
+    let fn_idx = query
+        .capture_names()
+        .iter()
+        .position(|n| *n == "fn")
+        .unwrap();
+    let arg_idx = query
+        .capture_names()
+        .iter()
+        .position(|n| *n == "arg")
+        .unwrap();
+
+    let mut cursor = QueryCursor::new();
+    let mut matches = cursor.matches(&query, tree.root_node(), source);
+
+    while let Some(m) = matches.next() {
+        let fn_cap = m.captures.iter().find(|c| c.index as usize == fn_idx);
+        let arg_cap = m.captures.iter().find(|c| c.index as usize == arg_idx);
+        let (Some(fn_cap), Some(arg_cap)) = (fn_cap, arg_cap) else {
+            continue;
+        };
+
+        // Skip eval with string literals — those are less suspicious
+        if arg_cap.node.kind() == "string" {
+            continue;
+        }
+
+        let arg_text = arg_cap.node.utf8_text(source).unwrap_or("");
+        let line = fn_cap.node.start_position().row + 1;
+
+        findings.push(AstFinding {
+            rule_id: "DEPSEC-P001".into(),
+            severity: Severity::High,
+            confidence: Confidence::Medium,
+            message: format!("eval() with dynamic argument: eval({arg_text})"),
+            line,
+        });
     }
 }
 
