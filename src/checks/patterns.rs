@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use rayon::prelude::*;
 use regex::Regex;
 use walkdir::WalkDir;
 
@@ -302,6 +303,165 @@ fn collect_files_walkdir(root: &Path, extra_skip_dirs: &[String]) -> Vec<std::pa
     files
 }
 
+/// Scan a single file for pattern matches. Returns None if the file can't be read.
+/// Designed to be called from rayon par_iter — each thread has its own AstAnalyzer.
+fn scan_single_file(
+    path: &Path,
+    root: &Path,
+    compiled: &[(&PatternRule, Regex)],
+    ignored_rules: &[&str],
+    ast_analyzer: &mut AstAnalyzer,
+) -> Option<Vec<Finding>> {
+    let is_large = path
+        .metadata()
+        .map(|m| m.len() > MAX_FILE_SIZE)
+        .unwrap_or(false);
+
+    let is_minified = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n.ends_with(".min.js") || n.ends_with(".min.mjs"));
+
+    let content = if is_large {
+        let bytes = std::fs::read(path).ok()?;
+        let head_len = 50_000.min(bytes.len());
+        let tail_start = bytes.len().saturating_sub(50_000);
+        let mut sample = bytes[..head_len].to_vec();
+        if tail_start > head_len {
+            sample.extend_from_slice(&bytes[tail_start..]);
+        }
+        String::from_utf8_lossy(&sample).to_string()
+    } else {
+        std::fs::read_to_string(path).ok()?
+    };
+
+    let rel_path = path
+        .strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .to_string();
+
+    let mut findings = Vec::new();
+
+    // AST analysis
+    let lang = crate::ast::detect_language(path);
+    let needs_ast = lang.is_some()
+        && match lang {
+            Some(crate::ast::Lang::JavaScript | crate::ast::Lang::TypeScript) => {
+                content.contains("child_process")
+                    || content.contains("shelljs")
+                    || content.contains("execa")
+                    || content.contains("cross-spawn")
+                    || content.contains("new Function")
+                    || content.contains("require(")
+                    || content.contains("import(")
+                    || content.contains("fromCharCode")
+                    || content.contains("unlinkSync")
+                    || content.contains("rmSync")
+            }
+            Some(crate::ast::Lang::Python) => {
+                content.contains("subprocess")
+                    || content.contains("os.system")
+                    || content.contains("os.popen")
+                    || content.contains("eval(")
+                    || content.contains("exec(")
+                    || content.contains("__import__")
+                    || content.contains("pickle")
+            }
+            Some(crate::ast::Lang::Ruby) => {
+                content.contains("eval")
+                    || content.contains("system")
+                    || content.contains("exec")
+                    || content.contains("`")
+                    || content.contains("send(")
+                    || content.contains("open(")
+            }
+            _ => false,
+        };
+
+    let ast_handled = if needs_ast {
+        let ast_findings = ast_analyzer.analyze(path, &content);
+        let pkg = extract_package_name(&rel_path);
+        for af in &ast_findings {
+            let suggestion = match af.rule_id.as_str() {
+                "DEPSEC-P001" => "Verify commands are static or properly escaped — safe for build tools, suspicious for runtime libraries",
+                "DEPSEC-P008" => "Expected for template engines — verify template inputs are properly escaped",
+                "DEPSEC-P013" => "Dynamic require() is almost never legitimate in dependencies — this is a strong malware indicator",
+                "DEPSEC-P014" => "Legitimate code rarely combines charCodeAt with XOR — this is a strong obfuscation indicator",
+                "DEPSEC-P024" => "Never deserialize untrusted pickle data — pickle.loads executes arbitrary code",
+                "DEPSEC-P034" => "open(\"|\") spawns a shell command — avoid with untrusted input",
+                _ => "Review this dependency for suspicious behavior",
+            };
+            findings.push(
+                Finding::new(af.rule_id.clone(), af.severity, af.message.clone())
+                    .with_file(&rel_path, af.line)
+                    .with_confidence(af.confidence)
+                    .with_suggestion(suggestion)
+                    .with_package(pkg.clone()),
+            );
+        }
+        true
+    } else {
+        false
+    };
+
+    let has_dangerous_exec_module = DANGEROUS_EXEC_MODULES.iter().any(|m| content.contains(m));
+
+    // Regex patterns
+    for (line_num, raw_line) in content.lines().enumerate() {
+        let normalized = normalize_confusables(raw_line);
+        let line = &resolve_string_concat(&normalized);
+        for (rule, re) in compiled {
+            if ast_handled && is_ast_rule(rule.rule_id) && is_js_or_ts(path) {
+                continue;
+            }
+
+            if rule.rule_id == "DEPSEC-P001" && is_js_or_ts(path) && !has_dangerous_exec_module {
+                let trimmed = line.trim();
+                if !trimmed.contains("eval") {
+                    continue;
+                }
+            }
+
+            if re.is_match(line) {
+                if rule.rule_id == "DEPSEC-P006" && !is_install_script(path, line) {
+                    continue;
+                }
+
+                let snippet = truncate_line(line, 80);
+                findings.push(
+                    Finding::new(
+                        rule.rule_id,
+                        rule.severity,
+                        format!("{}: {snippet}", rule.description),
+                    )
+                    .with_file(&rel_path, line_num + 1)
+                    .with_confidence(rule.confidence)
+                    .with_suggestion(rule.suggestion)
+                    .with_package(extract_package_name(&rel_path)),
+                );
+            }
+        }
+    }
+
+    // Entropy check (skip minified)
+    if !is_minified && !ignored_rules.contains(&"DEPSEC-P007") {
+        check_entropy(&content, &rel_path, &mut findings);
+    }
+
+    // Cross-line decode+exec check
+    if !ignored_rules.contains(&"DEPSEC-P002") {
+        let already_has_p002 = findings
+            .iter()
+            .any(|f| f.rule_id == "DEPSEC-P002" && f.file.as_deref() == Some(&rel_path));
+        if !already_has_p002 {
+            check_cross_line_decode_exec(&content, &rel_path, &mut findings);
+        }
+    }
+
+    Some(findings)
+}
+
 pub struct PatternsCheck;
 
 impl Check for PatternsCheck {
@@ -327,9 +487,7 @@ impl Check for PatternsCheck {
             .collect();
 
         let mut findings = Vec::new();
-        let mut scanned_files = 0;
         let mut pass_messages = Vec::new();
-        let mut ast_analyzer = AstAnalyzer::new();
 
         // Lock file-based caching: only scan new/changed packages
         let lock_packages = crate::scan_cache::parse_lockfile(ctx.root);
@@ -371,185 +529,39 @@ impl Check for PatternsCheck {
             ));
         }
 
-        // Scan collected files
-        for path in &files_to_scan {
-            // For large files, sample first+last 50KB instead of skipping entirely.
-            // Attackers can hide malicious code in >500KB bundles to evade scanners.
-            let is_large = path
-                .metadata()
-                .map(|m| m.len() > MAX_FILE_SIZE)
-                .unwrap_or(false);
-
-            // Skip minified JS for entropy check
-            let is_minified = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(|n| n.ends_with(".min.js") || n.ends_with(".min.mjs"))
-                .unwrap_or(false);
-
-            let content = if is_large {
-                // Sample first and last 50KB of large files
-                match std::fs::read(path) {
-                    Ok(bytes) => {
-                        let head_len = 50_000.min(bytes.len());
-                        let tail_start = bytes.len().saturating_sub(50_000);
-                        let mut sample = bytes[..head_len].to_vec();
-                        if tail_start > head_len {
-                            sample.extend_from_slice(&bytes[tail_start..]);
-                        }
-                        String::from_utf8_lossy(&sample).to_string()
+        // Scan collected files in parallel using rayon
+        let (par_findings, par_count): (Vec<Vec<Finding>>, Vec<usize>) = files_to_scan
+            .par_iter()
+            .fold(
+                || (Vec::new(), Vec::new(), AstAnalyzer::new()),
+                |(mut all_findings, mut all_counts, mut ast_analyzer), path| {
+                    if let Some(file_findings) = scan_single_file(
+                        path,
+                        ctx.root,
+                        &compiled,
+                        &ignored_rules,
+                        &mut ast_analyzer,
+                    ) {
+                        all_counts.push(1);
+                        all_findings.push(file_findings);
                     }
-                    Err(_) => continue,
-                }
-            } else {
-                match std::fs::read_to_string(path) {
-                    Ok(c) => c,
-                    Err(_) => continue,
-                }
-            };
+                    (all_findings, all_counts, ast_analyzer)
+                },
+            )
+            .map(|(findings, counts, _)| (findings, counts))
+            .reduce(
+                || (Vec::new(), Vec::new()),
+                |(mut a_f, mut a_c), (b_f, b_c)| {
+                    a_f.extend(b_f);
+                    a_c.extend(b_c);
+                    (a_f, a_c)
+                },
+            );
 
-            scanned_files += 1;
-            let rel_path = path
-                .strip_prefix(ctx.root)
-                .unwrap_or(path)
-                .to_string_lossy()
-                .to_string();
-
-            // AST analysis — parse with tree-sitter if the file mentions dangerous
-            // patterns that need structural analysis. Language-aware probes ensure
-            // Python/Ruby AST rules (P020-P033) are triggered, not just JS.
-            let lang = crate::ast::detect_language(path);
-            let needs_ast = lang.is_some()
-                && match lang {
-                    Some(crate::ast::Lang::JavaScript | crate::ast::Lang::TypeScript) => {
-                        content.contains("child_process")
-                            || content.contains("shelljs")
-                            || content.contains("execa")
-                            || content.contains("cross-spawn")
-                            || content.contains("new Function")
-                            || content.contains("require(")
-                            || content.contains("import(")
-                            || content.contains("fromCharCode")
-                            || content.contains("unlinkSync")
-                            || content.contains("rmSync")
-                    }
-                    Some(crate::ast::Lang::Python) => {
-                        content.contains("subprocess")
-                            || content.contains("os.system")
-                            || content.contains("os.popen")
-                            || content.contains("eval(")
-                            || content.contains("exec(")
-                            || content.contains("__import__")
-                            || content.contains("pickle")
-                    }
-                    Some(crate::ast::Lang::Ruby) => {
-                        content.contains("eval")
-                            || content.contains("system")
-                            || content.contains("exec")
-                            || content.contains("`")
-                            || content.contains("send(")
-                            || content.contains("open(")
-                    }
-                    _ => false,
-                };
-
-            let ast_handled = if needs_ast {
-                let ast_findings = ast_analyzer.analyze(path, &content);
-                let pkg = extract_package_name(&rel_path);
-                for af in &ast_findings {
-                    let suggestion = match af.rule_id.as_str() {
-                            "DEPSEC-P001" => "Verify commands are static or properly escaped — safe for build tools, suspicious for runtime libraries",
-                            "DEPSEC-P008" => "Expected for template engines — verify template inputs are properly escaped",
-                            "DEPSEC-P013" => "Dynamic require() is almost never legitimate in dependencies — this is a strong malware indicator",
-                            "DEPSEC-P014" => "Legitimate code rarely combines charCodeAt with XOR — this is a strong obfuscation indicator",
-                            "DEPSEC-P024" => "Never deserialize untrusted pickle data — pickle.loads executes arbitrary code",
-                            "DEPSEC-P034" => "open(\"|\") spawns a shell command — avoid with untrusted input",
-                            _ => "Review this dependency for suspicious behavior",
-                        };
-                    findings.push(
-                        Finding::new(af.rule_id.clone(), af.severity, af.message.clone())
-                            .with_file(&rel_path, af.line)
-                            .with_confidence(af.confidence)
-                            .with_suggestion(suggestion)
-                            .with_package(pkg.clone()),
-                    );
-                }
-                true
-            } else {
-                false
-            };
-
-            // Pre-compute whether this file has any dangerous exec module
-            // for P001 gating — if a JS/TS file doesn't mention child_process etc.,
-            // regex.exec()/db.exec() are always benign, skip P001 entirely.
-            let has_dangerous_exec_module =
-                DANGEROUS_EXEC_MODULES.iter().any(|m| content.contains(m));
-
-            // Regex patterns — skip AST-handled rules for JS/TS files
-            for (line_num, raw_line) in content.lines().enumerate() {
-                // Pre-process line for evasion resistance:
-                // 1. Normalize confusable unicode (Cyrillic → Latin)
-                // 2. Resolve string concatenation ("read" + "File" → "readFile")
-                let normalized = normalize_confusables(raw_line);
-                let line = &resolve_string_concat(&normalized);
-                for (rule, re) in &compiled {
-                    // If AST analyzed this JS/TS file, skip P001/P008/P013 (AST handles them).
-                    // For Python/Ruby, the JS-specific AST rules don't apply — regex still runs.
-                    if ast_handled && is_ast_rule(rule.rule_id) && is_js_or_ts(path) {
-                        continue;
-                    }
-
-                    // P001 (eval/exec): For JS/TS files without dangerous modules,
-                    // skip exec() matching — regex.exec(), db.exec() are benign.
-                    // eval() is NOT gated: it's always suspicious in any context.
-                    if rule.rule_id == "DEPSEC-P001"
-                        && is_js_or_ts(path)
-                        && !has_dangerous_exec_module
-                    {
-                        // Only skip if this particular match is exec(), not eval()
-                        let trimmed = line.trim();
-                        if !trimmed.contains("eval") {
-                            continue;
-                        }
-                    }
-
-                    if re.is_match(line) {
-                        // Special handling for P006: only flag in package.json scripts
-                        if rule.rule_id == "DEPSEC-P006" && !is_install_script(path, line) {
-                            continue;
-                        }
-
-                        let snippet = truncate_line(line, 80);
-                        findings.push(
-                            Finding::new(
-                                rule.rule_id,
-                                rule.severity,
-                                format!("{}: {snippet}", rule.description),
-                            )
-                            .with_file(&rel_path, line_num + 1)
-                            .with_confidence(rule.confidence)
-                            .with_suggestion(rule.suggestion)
-                            .with_package(extract_package_name(&rel_path)),
-                        );
-                    }
-                }
-            }
-
-            // DEPSEC-P007: High-entropy strings (skip minified files)
-            if !is_minified && !ignored_rules.contains(&"DEPSEC-P007") {
-                check_entropy(&content, &rel_path, &mut findings);
-            }
-
-            // DEPSEC-P002 cross-line: base64 decode + exec/require in same file
-            if !ignored_rules.contains(&"DEPSEC-P002") {
-                let already_has_p002 = findings
-                    .iter()
-                    .any(|f| f.rule_id == "DEPSEC-P002" && f.file.as_deref() == Some(&rel_path));
-                if !already_has_p002 {
-                    check_cross_line_decode_exec(&content, &rel_path, &mut findings);
-                }
-            }
+        for file_findings in par_findings {
+            findings.extend(file_findings);
         }
+        let scanned_files: usize = par_count.iter().sum();
 
         // DEPSEC-P009: Python .pth file persistence
         if !ignored_rules.contains(&"DEPSEC-P009") {

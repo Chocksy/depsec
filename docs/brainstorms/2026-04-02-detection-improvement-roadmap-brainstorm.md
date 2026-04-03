@@ -294,9 +294,9 @@ for pkg in packages {
 - [x] Cache stored in `.depsec/scan-cache.json`
 
 **Phase 3: Parallel package scanning**
-- [ ] Add `rayon` to Cargo.toml for data parallelism
-- [ ] `packages.par_iter().for_each(|pkg| scan_package(pkg))` 
-- [ ] Expected: 32s → ~8s on POS (4-core parallelism)
+- [x] Add `rayon` to Cargo.toml for data parallelism
+- [x] `files_to_scan.par_iter().fold()` with per-thread AstAnalyzer
+- [x] POS: 9m19s → 3m06s (3x), ai-standups: 2m03s → 49s (2.5x), CEMS: 13.3s → 10.6s
 
 **Phase 4: Python/Ruby equivalents**
 - [ ] pip: parse requirements.txt or poetry.lock for package names
