@@ -24,22 +24,74 @@ pub fn analyze(parser: &mut Parser, source: &str) -> Vec<AstFinding> {
     let source_bytes = source.as_bytes();
     let mut findings = Vec::new();
 
+    // Pre-pass: resolve import aliases (import subprocess as sp → sp maps to subprocess)
+    let aliases = resolve_import_aliases(&tree, source_bytes);
+
     // P020: eval() / exec() with arguments
     find_dangerous_builtins(&tree, source_bytes, &mut findings);
 
-    // P021: subprocess with shell=True
-    find_subprocess_shell(&tree, source_bytes, &mut findings);
+    // P021: subprocess with shell=True (supports aliases)
+    find_subprocess_shell(&tree, source_bytes, &aliases, &mut findings);
 
-    // P022: os.system() calls
-    find_os_system(&tree, source_bytes, &mut findings);
+    // P022: os.system() calls (supports aliases)
+    find_os_system(&tree, source_bytes, &aliases, &mut findings);
 
     // P023: __import__() dynamic imports
     find_dynamic_import(&tree, source_bytes, &mut findings);
 
-    // P024: pickle deserialization (arbitrary code execution)
-    find_pickle_deserialize(&tree, source_bytes, &mut findings);
+    // P024: pickle deserialization (supports aliases)
+    find_pickle_deserialize(&tree, source_bytes, &aliases, &mut findings);
 
     findings
+}
+
+/// Resolve Python import aliases: `import subprocess as sp` → {"sp": "subprocess"}
+fn resolve_import_aliases(
+    tree: &tree_sitter::Tree,
+    source: &[u8],
+) -> std::collections::HashMap<String, String> {
+    let mut aliases = std::collections::HashMap::new();
+
+    // Match: import X as Y
+    let query = Query::new(
+        &tree.language(),
+        r#"
+        (import_statement
+          name: (aliased_import
+            name: (dotted_name) @module
+            alias: (identifier) @alias))
+        "#,
+    );
+
+    if let Ok(query) = query {
+        let module_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "module")
+            .unwrap();
+        let alias_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "alias")
+            .unwrap();
+
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), source);
+
+        while let Some(m) = matches.next() {
+            let module_cap = m.captures.iter().find(|c| c.index as usize == module_idx);
+            let alias_cap = m.captures.iter().find(|c| c.index as usize == alias_idx);
+            if let (Some(mod_cap), Some(al_cap)) = (module_cap, alias_cap) {
+                let module = mod_cap.node.utf8_text(source).unwrap_or("");
+                let alias = al_cap.node.utf8_text(source).unwrap_or("");
+                if !module.is_empty() && !alias.is_empty() {
+                    aliases.insert(alias.to_string(), module.to_string());
+                }
+            }
+        }
+    }
+
+    aliases
 }
 
 /// Extract variable assignments with string literal values for secret detection.
@@ -210,9 +262,14 @@ fn find_dangerous_builtins(
     }
 }
 
-/// P021: subprocess with shell=True
-fn find_subprocess_shell(tree: &tree_sitter::Tree, source: &[u8], findings: &mut Vec<AstFinding>) {
-    // Match subprocess.Popen/call/run/check_output with shell=True
+/// P021: subprocess with shell=True (supports import aliases)
+fn find_subprocess_shell(
+    tree: &tree_sitter::Tree,
+    source: &[u8],
+    aliases: &std::collections::HashMap<String, String>,
+    findings: &mut Vec<AstFinding>,
+) {
+    // Match obj.method(shell=True) — check obj against "subprocess" + aliases
     let query = Query::new(
         &tree.language(),
         r#"
@@ -224,12 +281,16 @@ fn find_subprocess_shell(tree: &tree_sitter::Tree, source: &[u8], findings: &mut
             (keyword_argument
               name: (identifier) @kwarg
               value: (true) @val))
-          (#eq? @obj "subprocess")
           (#eq? @kwarg "shell"))
         "#,
     );
 
     if let Ok(query) = query {
+        let obj_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "obj")
+            .unwrap();
         let method_idx = query
             .capture_names()
             .iter()
@@ -240,10 +301,19 @@ fn find_subprocess_shell(tree: &tree_sitter::Tree, source: &[u8], findings: &mut
         let mut matches = cursor.matches(&query, tree.root_node(), source);
 
         while let Some(m) = matches.next() {
+            let obj_cap = m.captures.iter().find(|c| c.index as usize == obj_idx);
             let method_cap = m.captures.iter().find(|c| c.index as usize == method_idx);
-            let Some(method_cap) = method_cap else {
+            let (Some(obj_cap), Some(method_cap)) = (obj_cap, method_cap) else {
                 continue;
             };
+
+            let obj_name = obj_cap.node.utf8_text(source).unwrap_or("");
+            // Check if obj is "subprocess" or an alias that resolves to "subprocess"
+            let is_subprocess = obj_name == "subprocess"
+                || aliases.get(obj_name).map(|v| v.as_str()) == Some("subprocess");
+            if !is_subprocess {
+                continue;
+            }
 
             let method_name = method_cap.node.utf8_text(source).unwrap_or("");
             let line = method_cap.node.start_position().row + 1;
@@ -253,7 +323,7 @@ fn find_subprocess_shell(tree: &tree_sitter::Tree, source: &[u8], findings: &mut
                 severity: Severity::High,
                 confidence: Confidence::High,
                 message: format!(
-                    "subprocess.{method_name}() with shell=True — command injection risk"
+                    "{obj_name}.{method_name}() with shell=True — command injection risk"
                 ),
                 line,
             });
@@ -261,8 +331,13 @@ fn find_subprocess_shell(tree: &tree_sitter::Tree, source: &[u8], findings: &mut
     }
 }
 
-/// P022: os.system() calls
-fn find_os_system(tree: &tree_sitter::Tree, source: &[u8], findings: &mut Vec<AstFinding>) {
+/// P022: os.system() calls (supports import aliases)
+fn find_os_system(
+    tree: &tree_sitter::Tree,
+    source: &[u8],
+    aliases: &std::collections::HashMap<String, String>,
+    findings: &mut Vec<AstFinding>,
+) {
     let query = Query::new(
         &tree.language(),
         r#"
@@ -270,12 +345,16 @@ fn find_os_system(tree: &tree_sitter::Tree, source: &[u8], findings: &mut Vec<As
           function: (attribute
             object: (identifier) @obj
             attribute: (identifier) @method)
-          (#eq? @obj "os")
           (#match? @method "^(system|popen)$"))
         "#,
     );
 
     if let Ok(query) = query {
+        let obj_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "obj")
+            .unwrap();
         let method_idx = query
             .capture_names()
             .iter()
@@ -286,10 +365,17 @@ fn find_os_system(tree: &tree_sitter::Tree, source: &[u8], findings: &mut Vec<As
         let mut matches = cursor.matches(&query, tree.root_node(), source);
 
         while let Some(m) = matches.next() {
+            let obj_cap = m.captures.iter().find(|c| c.index as usize == obj_idx);
             let method_cap = m.captures.iter().find(|c| c.index as usize == method_idx);
-            let Some(method_cap) = method_cap else {
+            let (Some(obj_cap), Some(method_cap)) = (obj_cap, method_cap) else {
                 continue;
             };
+
+            let obj_name = obj_cap.node.utf8_text(source).unwrap_or("");
+            let is_os = obj_name == "os" || aliases.get(obj_name).map(|v| v.as_str()) == Some("os");
+            if !is_os {
+                continue;
+            }
 
             let method_name = method_cap.node.utf8_text(source).unwrap_or("");
             let line = method_cap.node.start_position().row + 1;
@@ -298,7 +384,7 @@ fn find_os_system(tree: &tree_sitter::Tree, source: &[u8], findings: &mut Vec<As
                 rule_id: "DEPSEC-P022".into(),
                 severity: Severity::High,
                 confidence: Confidence::High,
-                message: format!("os.{method_name}() — shell command execution"),
+                message: format!("{obj_name}.{method_name}() — shell command execution"),
                 line,
             });
         }
@@ -370,6 +456,7 @@ fn find_dynamic_import(tree: &tree_sitter::Tree, source: &[u8], findings: &mut V
 fn find_pickle_deserialize(
     tree: &tree_sitter::Tree,
     source: &[u8],
+    aliases: &std::collections::HashMap<String, String>,
     findings: &mut Vec<AstFinding>,
 ) {
     let query = Query::new(
@@ -379,12 +466,16 @@ fn find_pickle_deserialize(
           function: (attribute
             object: (identifier) @obj
             attribute: (identifier) @method)
-          (#eq? @obj "pickle")
           (#match? @method "^(loads|load|Unpickler)$"))
         "#,
     );
 
     if let Ok(query) = query {
+        let obj_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "obj")
+            .unwrap();
         let method_idx = query
             .capture_names()
             .iter()
@@ -395,20 +486,31 @@ fn find_pickle_deserialize(
         let mut matches = cursor.matches(&query, tree.root_node(), source);
 
         while let Some(m) = matches.next() {
-            if let Some(method_cap) = m.captures.iter().find(|c| c.index as usize == method_idx) {
-                let method_name = method_cap.node.utf8_text(source).unwrap_or("");
-                let line = method_cap.node.start_position().row + 1;
+            let obj_cap = m.captures.iter().find(|c| c.index as usize == obj_idx);
+            let method_cap = m.captures.iter().find(|c| c.index as usize == method_idx);
+            let (Some(obj_cap), Some(method_cap)) = (obj_cap, method_cap) else {
+                continue;
+            };
 
-                findings.push(AstFinding {
-                    rule_id: "DEPSEC-P024".into(),
-                    severity: Severity::Critical,
-                    confidence: Confidence::High,
-                    message: format!(
-                        "pickle.{method_name}() — arbitrary code execution via deserialization"
-                    ),
-                    line,
-                });
+            let obj_name = obj_cap.node.utf8_text(source).unwrap_or("");
+            let is_pickle =
+                obj_name == "pickle" || aliases.get(obj_name).map(|v| v.as_str()) == Some("pickle");
+            if !is_pickle {
+                continue;
             }
+
+            let method_name = method_cap.node.utf8_text(source).unwrap_or("");
+            let line = method_cap.node.start_position().row + 1;
+
+            findings.push(AstFinding {
+                rule_id: "DEPSEC-P024".into(),
+                severity: Severity::Critical,
+                confidence: Confidence::High,
+                message: format!(
+                    "{obj_name}.{method_name}() — arbitrary code execution via deserialization"
+                ),
+                line,
+            });
         }
     }
 }

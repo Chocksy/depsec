@@ -397,6 +397,79 @@ fn find_dangerous_calls(
             });
         }
     }
+
+    // Query 3: require('child_process').exec(args) — chained call without variable assignment
+    // E.g., inside Object.defineProperty getters or inline expressions
+    let chained_query = Query::new(
+        &tree.language(),
+        r#"
+        (call_expression
+          function: (member_expression
+            object: (call_expression
+              function: (identifier) @req_fn
+              arguments: (arguments
+                (string (string_fragment) @module)))
+            property: (property_identifier) @method)
+          arguments: (arguments) @args
+          (#eq? @req_fn "require"))
+        "#,
+    );
+
+    if let Ok(query) = chained_query {
+        let module_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "module")
+            .unwrap();
+        let method_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "method")
+            .unwrap();
+        let args_idx = query
+            .capture_names()
+            .iter()
+            .position(|n| *n == "args")
+            .unwrap();
+
+        let mut cursor = QueryCursor::new();
+        let mut matches = cursor.matches(&query, tree.root_node(), source);
+
+        while let Some(m) = matches.next() {
+            let module_cap = m.captures.iter().find(|c| c.index as usize == module_idx);
+            let method_cap = m.captures.iter().find(|c| c.index as usize == method_idx);
+            let args_cap = m.captures.iter().find(|c| c.index as usize == args_idx);
+            let (Some(module_cap), Some(method_cap), Some(args_cap)) =
+                (module_cap, method_cap, args_cap)
+            else {
+                continue;
+            };
+
+            let module_name = module_cap.node.utf8_text(source).unwrap_or("");
+            if !DANGEROUS_MODULES.contains(&module_name) {
+                continue;
+            }
+
+            let method_text = method_cap.node.utf8_text(source).unwrap_or("");
+            if !DANGEROUS_METHODS.contains(&method_text) {
+                continue;
+            }
+
+            let severity = classify_arg_severity(&args_cap.node, source);
+            let line = method_cap.node.start_position().row + 1;
+
+            findings.push(AstFinding {
+                rule_id: "DEPSEC-P001".into(),
+                severity,
+                confidence: Confidence::High,
+                message: format!(
+                    "require('{module_name}').{method_text}() — chained call with {} argument",
+                    severity_arg_label(&severity)
+                ),
+                line,
+            });
+        }
+    }
 }
 
 /// Classify severity based on the first argument's type

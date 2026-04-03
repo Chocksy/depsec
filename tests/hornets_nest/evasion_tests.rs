@@ -129,7 +129,7 @@ pub fn run_all() -> Vec<VectorResult> {
             name: "hn-python-alias",
             layer: Layer::StaticScan,
             technique: "import subprocess as sp",
-            expected: Expected::Miss,
+            expected: Expected::Detect, // Python alias resolution now resolves sp → subprocess
             test_fn: test_python_alias,
         },
         EvasionTest {
@@ -161,7 +161,7 @@ pub fn run_all() -> Vec<VectorResult> {
             name: "hn-getter-exec",
             layer: Layer::StaticScan,
             technique: "Object.defineProperty getter",
-            expected: Expected::Miss,
+            expected: Expected::Miss, // Chained call inside getter body not yet caught
             test_fn: test_getter_exec,
         },
         EvasionTest {
