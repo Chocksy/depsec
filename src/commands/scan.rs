@@ -169,36 +169,44 @@ pub fn run(root: &Path, opts: &ScanOpts) -> ExitCode {
                 },
                 _ => {
                     if opts.full || opts.verbose {
+                        // --full or --verbose: detailed output (for auditors)
                         print!(
                             "{}",
                             output::render_human(&report, opts.color, opts.persona, opts.verbose)
                         );
-                    } else {
+                        if !triage_results.is_empty() {
+                            print!(
+                                "{}",
+                                triage::render_triage_results(
+                                    &visible_findings,
+                                    &triage_results,
+                                    opts.color
+                                )
+                            );
+                        }
+                    } else if !triage_results.is_empty() {
+                        // Definitive mode: package-focused output with LLM verdicts
                         print!(
                             "{}",
-                            output::render_executive(&report, opts.color, opts.persona,)
-                        );
-                    }
-
-                    // Show triage results inline (if we have them)
-                    if !triage_results.is_empty() {
-                        print!(
-                            "{}",
-                            triage::render_triage_results(
-                                &visible_findings,
+                            output::render_definitive(
+                                &report,
                                 &triage_results,
-                                opts.color
+                                &visible_findings,
+                                opts.color,
+                                opts.persona,
                             )
                         );
-                    } else if llm_client.is_none()
-                        && !opts.no_triage
-                        && !visible_findings.is_empty()
-                        && is_human
-                    {
-                        // No API key available — hint to user
-                        eprintln!(
-                            "\n\x1b[2mTip: Set OPENROUTER_API_KEY for AI-powered definitive verdicts\x1b[0m"
+                    } else {
+                        // Static-only mode: executive summary
+                        print!(
+                            "{}",
+                            output::render_executive(&report, opts.color, opts.persona)
                         );
+                        if llm_client.is_none() && !opts.no_triage && !visible_findings.is_empty() {
+                            eprintln!(
+                                "\n\x1b[2mTip: Set OPENROUTER_API_KEY for AI-powered definitive verdicts\x1b[0m"
+                            );
+                        }
                     }
                 }
             }

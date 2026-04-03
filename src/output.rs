@@ -634,6 +634,167 @@ pub fn render_executive(report: &ScanReport, use_color: bool, persona: Persona) 
     out
 }
 
+/// Definitive output: package-focused, clean, actionable.
+/// Groups findings by package and shows one line per suspicious package.
+/// Used when LLM triage results are available for the definitive experience.
+pub fn render_definitive(
+    report: &ScanReport,
+    triage_results: &[(usize, crate::triage::TriageResult, crate::llm::TokenUsage)],
+    findings: &[Finding],
+    use_color: bool,
+    persona: Persona,
+) -> String {
+    let mut out = String::new();
+
+    let red = if use_color { "\x1b[31m" } else { "" };
+    let yellow = if use_color { "\x1b[33m" } else { "" };
+    let green = if use_color { "\x1b[32m" } else { "" };
+    let bold = if use_color { "\x1b[1m" } else { "" };
+    let dim = if use_color { "\x1b[90m" } else { "" };
+    let reset = if use_color { "\x1b[0m" } else { "" };
+
+    // Count packages scanned
+    let all_findings: Vec<&Finding> = report.results.iter().flat_map(|r| &r.findings).collect();
+    let mut all_packages: HashSet<String> = HashSet::new();
+    for f in &all_findings {
+        if let Some(pkg) = &f.package {
+            all_packages.insert(pkg.clone());
+        }
+    }
+    let total_packages = all_packages.len();
+
+    // Recompute score
+    let filtered_results: Vec<CheckResult> = report
+        .results
+        .iter()
+        .map(|r| {
+            let filtered: Vec<Finding> = r
+                .findings
+                .iter()
+                .filter(|f| finding_passes_persona(f, persona))
+                .cloned()
+                .collect();
+            CheckResult::new(
+                r.category.clone(),
+                filtered,
+                r.max_score,
+                r.pass_messages.clone(),
+            )
+        })
+        .collect();
+    let score = compute_total_score(&filtered_results);
+    let grade = compute_grade(score);
+    let grade_str = format_grade(&grade, use_color);
+
+    // Header
+    out.push_str(&format!(
+        "{bold}depsec v{}{reset} — {}\n",
+        env!("CARGO_PKG_VERSION"),
+        report.project_name,
+    ));
+    out.push_str(&format!("\n{} packages analyzed", total_packages));
+
+    // Group triage results by package
+    let mut tp_packages: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut fp_packages: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut ni_packages: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
+    for (idx, result, _usage) in triage_results {
+        let finding = &findings[*idx];
+        let pkg = finding.package.clone().unwrap_or_else(|| "unknown".into());
+
+        let entry = format!(
+            "{}: {}",
+            finding.rule_id,
+            finding.message.lines().next().unwrap_or("")
+        );
+
+        match result.classification {
+            crate::triage::Classification::TruePositive => {
+                tp_packages.entry(pkg).or_default().push(entry);
+            }
+            crate::triage::Classification::FalsePositive => {
+                fp_packages.entry(pkg).or_default().push(entry);
+            }
+            crate::triage::Classification::NeedsInvestigation => {
+                ni_packages.entry(pkg).or_default().push(entry);
+            }
+        }
+    }
+
+    // True Positives — these are the real issues
+    if !tp_packages.is_empty() {
+        out.push_str(&format!(
+            "\n\n{red}{bold}✗ {} issue{}:{reset}\n",
+            tp_packages.len(),
+            if tp_packages.len() == 1 { "" } else { "s" }
+        ));
+        for (pkg, issues) in &tp_packages {
+            out.push_str(&format!("\n  {red}{bold}{pkg}{reset}\n"));
+            // Find the triage reasoning for this package
+            for (idx, result, _) in triage_results {
+                let f = &findings[*idx];
+                if f.package.as_deref() == Some(pkg)
+                    && matches!(
+                        result.classification,
+                        crate::triage::Classification::TruePositive
+                    )
+                {
+                    out.push_str(&format!(
+                        "  {red}→{reset} {}\n",
+                        result.reasoning.lines().next().unwrap_or("")
+                    ));
+                    break;
+                }
+            }
+            for issue in issues {
+                out.push_str(&format!("    {dim}{issue}{reset}\n"));
+            }
+        }
+    }
+
+    // Needs Investigation — worth a look
+    if !ni_packages.is_empty() {
+        out.push_str(&format!(
+            "\n{yellow}{bold}? {} package{} to review:{reset}\n",
+            ni_packages.len(),
+            if ni_packages.len() == 1 { "" } else { "s" }
+        ));
+        for pkg in ni_packages.keys() {
+            for (idx, result, _) in triage_results {
+                let f = &findings[*idx];
+                if f.package.as_deref() == Some(pkg)
+                    && matches!(
+                        result.classification,
+                        crate::triage::Classification::NeedsInvestigation
+                    )
+                {
+                    out.push_str(&format!(
+                        "  {yellow}?{reset} {bold}{pkg}{reset} — {}\n",
+                        result.reasoning.lines().next().unwrap_or("")
+                    ));
+                    break;
+                }
+            }
+        }
+    }
+
+    // False Positives — cleared by LLM
+    let fp_count = fp_packages.len();
+
+    // Clean count
+    let clean_count = total_packages.saturating_sub(tp_packages.len() + ni_packages.len());
+
+    out.push_str(&format!("\n{green}✓{reset} {clean_count} packages clean"));
+    if fp_count > 0 {
+        out.push_str(&format!(" {dim}({fp_count} cleared by AI){reset}"));
+    }
+
+    out.push_str(&format!("\n\nGrade: {grade_str} ({:.0}%)\n", score));
+
+    out
+}
+
 fn render_rule_glossary(report: &ScanReport, use_color: bool) -> String {
     let dim = if use_color { "\x1b[90m" } else { "" };
     let bold = if use_color { "\x1b[1m" } else { "" };
