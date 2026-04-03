@@ -134,38 +134,9 @@ const CREDENTIAL_PATHS: &[&str] = &[
     "/etc/shadow",
 ];
 
-// --- Built-in allowlist ---
-
-const CAPABILITY_ALLOWLIST: &[(&str, &[&str])] = &[
-    ("express", &["network"]),
-    ("koa", &["network"]),
-    ("fastify", &["network"]),
-    ("hapi", &["network"]),
-    ("axios", &["network"]),
-    ("node-fetch", &["network"]),
-    ("got", &["network"]),
-    ("undici", &["network"]),
-    ("superagent", &["network"]),
-    ("cross-fetch", &["network"]),
-    ("isomorphic-fetch", &["network"]),
-    ("request", &["network"]),
-    ("esbuild", &["shell_exec", "fs_write", "fs_read"]),
-    (
-        "node-gyp",
-        &["shell_exec", "network", "fs_write", "fs_read"],
-    ),
-    ("prisma", &["network", "fs_write", "fs_read", "shell_exec"]),
-    ("dotenv", &["fs_read", "env_access"]),
-    ("husky", &["shell_exec", "fs_write"]),
-    ("patch-package", &["fs_read", "fs_write"]),
-    ("prebuild-install", &["network", "fs_write"]),
-    ("sharp", &["fs_read", "fs_write", "network"]),
-    ("canvas", &["fs_read", "fs_write"]),
-    ("bcrypt", &["shell_exec"]),
-    ("better-sqlite3", &["shell_exec", "fs_read", "fs_write"]),
-    ("playwright", &["network", "shell_exec", "fs_write"]),
-    ("puppeteer", &["network", "shell_exec", "fs_write"]),
-];
+// No built-in allowlist — any package can be compromised (event-stream, ua-parser-js, colors.js).
+// Trust is earned by behavior analysis, not package identity. Users can add their own
+// allowlist via config if they explicitly choose to trust specific packages.
 
 // --- Combination rules ---
 
@@ -529,39 +500,30 @@ fn detect_capabilities(content: &str, caps: &mut PackageCapabilities) {
     }
 }
 
-/// Evaluate a package's capabilities against combination rules
+/// Evaluate a package's capabilities against combination rules.
+/// Only user-configured allowlists suppress findings — no built-in allowlist.
 fn evaluate_package(
     pkg_name: &str,
     caps: &PackageCapabilities,
     user_allow: &HashMap<String, Vec<String>>,
     findings: &mut Vec<Finding>,
 ) {
-    // Build allowed capabilities from built-in + user config
+    // User allowlist only — user explicitly chooses to trust specific packages
     let mut allowed: HashSet<&str> = HashSet::new();
-
-    // Built-in allowlist
-    for (name, allowed_caps) in CAPABILITY_ALLOWLIST {
-        if *name == pkg_name {
-            for cap in *allowed_caps {
-                allowed.insert(cap);
-            }
-        }
-    }
-
-    // User allowlist
     if let Some(user_caps) = user_allow.get(pkg_name) {
         for cap in user_caps {
             allowed.insert(cap.as_str());
         }
     }
 
-    // Check combination rules
     for rule in COMBINATION_RULES {
         if (rule.check)(caps) {
-            // Check if all involved capabilities are allowed
-            let is_allowed = is_combination_allowed(caps, rule, &allowed);
-            if is_allowed {
-                continue;
+            // If user explicitly allowed all involved capabilities, suppress
+            if !allowed.is_empty() {
+                let detected = caps.capabilities_list();
+                if detected.iter().all(|cap| allowed.contains(cap)) {
+                    continue;
+                }
             }
 
             let cap_list = caps.capabilities_list().join(", ");
@@ -580,17 +542,6 @@ fn evaluate_package(
             );
         }
     }
-}
-
-/// Check if a triggered combination is covered by the allowlist
-fn is_combination_allowed(
-    caps: &PackageCapabilities,
-    _rule: &CombinationRule,
-    allowed: &HashSet<&str>,
-) -> bool {
-    // If ALL detected capabilities are in the allowlist, suppress the finding
-    let detected = caps.capabilities_list();
-    detected.iter().all(|cap| allowed.contains(cap))
 }
 
 #[cfg(test)]
@@ -734,17 +685,19 @@ mod tests {
     }
 
     #[test]
-    fn test_allowlist_suppresses_finding() {
+    fn test_no_builtin_allowlist() {
+        // No built-in allowlist — even well-known packages trigger findings on suspicious combos
+        // Any package can be compromised (event-stream, ua-parser-js, colors.js)
         let caps = PackageCapabilities {
             network: true,
+            shell_exec: true,
             ..Default::default()
         };
         let mut findings = Vec::new();
-        // express is in the built-in allowlist for network
         evaluate_package("express", &caps, &HashMap::new(), &mut findings);
         assert!(
-            findings.is_empty(),
-            "Allowed capability should not produce findings"
+            !findings.is_empty(),
+            "No built-in allowlist — express with network+shell_exec should produce findings"
         );
     }
 
@@ -769,14 +722,21 @@ mod tests {
     }
 
     #[test]
-    fn test_allowlist_partial_does_not_suppress() {
+    fn test_user_allowlist_partial_does_not_suppress() {
         let caps = PackageCapabilities {
             network: true,
-            shell_exec: true, // NOT in express allowlist
+            shell_exec: true,
+            credential_read: true, // NOT in user allowlist
+            fs_read: true,
             ..Default::default()
         };
+        let mut user_allow = HashMap::new();
+        user_allow.insert(
+            "my-tool".to_string(),
+            vec!["network".to_string(), "shell_exec".to_string()],
+        );
         let mut findings = Vec::new();
-        evaluate_package("express", &caps, &HashMap::new(), &mut findings);
+        evaluate_package("my-tool", &caps, &user_allow, &mut findings);
         assert!(
             !findings.is_empty(),
             "Partially allowed capabilities should still produce findings"
