@@ -930,15 +930,39 @@ fn check_wasm_presence(
                     .to_string_lossy()
                     .to_string();
                 let pkg = extract_package_name(&rel_path);
+
+                // Phase B: Parse WASM imports for capability analysis
+                let imports = parse_wasm_imports(path);
+                let severity = if !imports.is_empty() {
+                    wasm_import_severity(&imports)
+                } else {
+                    Severity::High
+                };
+
+                let import_summary = if !imports.is_empty() {
+                    format!(
+                        " — imports: {}",
+                        imports
+                            .iter()
+                            .map(|(m, n)| format!("{m}.{n}"))
+                            .take(5)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                } else {
+                    String::new()
+                };
+
                 findings.push(
                     Finding::new(
                         "DEPSEC-P025",
-                        Severity::High,
+                        severity,
                         format!(
-                            "WebAssembly binary detected: {}",
+                            "WebAssembly binary detected: {}{}",
                             path.file_name()
                                 .and_then(|n| n.to_str())
-                                .unwrap_or("unknown.wasm")
+                                .unwrap_or("unknown.wasm"),
+                            import_summary
                         ),
                     )
                     .with_file(&rel_path, 0)
@@ -950,6 +974,150 @@ fn check_wasm_presence(
                 );
             }
         }
+    }
+}
+
+/// Parse WASM binary imports (module, name) pairs.
+/// WASM binary format: magic(4) + version(4) + sections.
+/// Import section (id=2) contains module+name+type for each import.
+fn parse_wasm_imports(path: &Path) -> Vec<(String, String)> {
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(_) => return vec![],
+    };
+
+    // Validate WASM magic + version
+    if bytes.len() < 8 || &bytes[0..4] != b"\0asm" {
+        return vec![];
+    }
+
+    let mut imports = Vec::new();
+    let mut pos = 8; // Skip magic + version
+
+    while pos < bytes.len() {
+        let section_id = bytes[pos];
+        pos += 1;
+
+        let (section_size, bytes_read) = read_leb128(&bytes[pos..]);
+        pos += bytes_read;
+
+        if section_id == 2 {
+            // Import section
+            let section_end = pos + section_size as usize;
+            let (num_imports, bytes_read) = read_leb128(&bytes[pos..]);
+            pos += bytes_read;
+
+            for _ in 0..num_imports {
+                if pos >= section_end {
+                    break;
+                }
+                // module name
+                let (mod_len, br) = read_leb128(&bytes[pos..]);
+                pos += br;
+                let mod_name = std::str::from_utf8(&bytes[pos..pos + mod_len as usize])
+                    .unwrap_or("")
+                    .to_string();
+                pos += mod_len as usize;
+
+                // import name
+                let (name_len, br) = read_leb128(&bytes[pos..]);
+                pos += br;
+                let import_name = std::str::from_utf8(&bytes[pos..pos + name_len as usize])
+                    .unwrap_or("")
+                    .to_string();
+                pos += name_len as usize;
+
+                // import type (1 byte kind + varying payload) — skip it
+                if pos < section_end {
+                    let kind = bytes[pos];
+                    pos += 1;
+                    match kind {
+                        0x00 => {
+                            let (_, br) = read_leb128(&bytes[pos..]);
+                            pos += br;
+                        } // func
+                        0x01 => pos += 4, // table: element_type(1) + limits(1+leb+leb)
+                        0x02 => {
+                            // memory: limits
+                            let flags = bytes.get(pos).copied().unwrap_or(0);
+                            pos += 1;
+                            let (_, br) = read_leb128(&bytes[pos..]);
+                            pos += br;
+                            if flags & 1 != 0 {
+                                let (_, br) = read_leb128(&bytes[pos..]);
+                                pos += br;
+                            }
+                        }
+                        0x03 => pos += 2, // global: valtype(1) + mut(1)
+                        _ => break,       // Unknown — stop parsing
+                    }
+                }
+
+                if !mod_name.is_empty() && !import_name.is_empty() {
+                    imports.push((mod_name, import_name));
+                }
+            }
+            break; // Found import section — done
+        }
+
+        // Skip this section
+        pos += section_size as usize;
+    }
+
+    imports
+}
+
+/// Read a LEB128 unsigned integer. Returns (value, bytes_consumed).
+fn read_leb128(bytes: &[u8]) -> (u64, usize) {
+    let mut result: u64 = 0;
+    let mut shift = 0;
+    for (i, &byte) in bytes.iter().enumerate() {
+        result |= ((byte & 0x7f) as u64) << shift;
+        if byte & 0x80 == 0 {
+            return (result, i + 1);
+        }
+        shift += 7;
+        if shift >= 64 {
+            return (result, i + 1);
+        }
+    }
+    (result, bytes.len())
+}
+
+/// High-risk WASM import patterns
+const WASM_DANGEROUS_IMPORTS: &[&str] = &[
+    "fd_write",
+    "fd_read",
+    "sock_open",
+    "sock_send",
+    "sock_recv",
+    "environ_get",
+    "environ_sizes_get",
+    "proc_exit",
+    "path_open",
+    "args_get",
+];
+
+/// Assess severity based on WASM imports.
+/// Network + filesystem = Critical, filesystem alone = High, other = Medium
+fn wasm_import_severity(imports: &[(String, String)]) -> Severity {
+    let has_network = imports
+        .iter()
+        .any(|(_, n)| n.contains("sock_") || n.contains("http"));
+    let has_fs = imports
+        .iter()
+        .any(|(_, n)| n.contains("fd_") || n.contains("path_open"));
+    let has_env = imports.iter().any(|(_, n)| n.contains("environ"));
+    let has_dangerous = imports
+        .iter()
+        .any(|(_, n)| WASM_DANGEROUS_IMPORTS.contains(&n.as_str()));
+
+    if has_network && (has_fs || has_env) {
+        Severity::Critical
+    } else if has_dangerous {
+        Severity::High
+    } else {
+        Severity::Medium
     }
 }
 
