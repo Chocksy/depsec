@@ -268,32 +268,24 @@ impl Check for PatternsCheck {
 
             let extra_skip_dirs = &ctx.config.patterns.skip_dirs;
             for entry in WalkDir::new(&dep_dir)
-                .follow_links(false) // Security: don't follow symlinks out of project
-                .max_depth(7) // Balance depth vs performance — most malware is top-level
+                .follow_links(false)
+                .max_depth(7)
                 .into_iter()
                 .filter_entry(|e| {
+                    if e.file_type().is_dir() {
+                        let name = e.file_name().to_str().unwrap_or("");
+                        return !should_skip_dir(name)
+                            && !extra_skip_dirs.iter().any(|d| d == name);
+                    }
+                    // For files: pre-filter by extension in the walker itself
+                    // This avoids stat() and read() on non-code files entirely
                     let name = e.file_name().to_str().unwrap_or("");
-                    !should_skip_dir(name) && !extra_skip_dirs.iter().any(|d| d == name)
+                    is_scannable_file(name)
                 })
                 .filter_map(|e| e.ok())
                 .filter(|e| e.file_type().is_file())
             {
                 let path = entry.path();
-
-                // Skip binary files by extension
-                if is_binary_ext(path) {
-                    continue;
-                }
-
-                // Skip metadata/declaration files that produce false positives
-                if is_skip_ext(path) {
-                    continue;
-                }
-
-                // Skip non-code files (READMEs, CHANGELOGs, LICENSEs)
-                if is_skip_filename(path) {
-                    continue;
-                }
 
                 // For large files, sample first+last 50KB instead of skipping entirely.
                 // Attackers can hide malicious code in >500KB bundles to evade scanners.
@@ -667,6 +659,67 @@ fn is_js_or_ts(path: &Path) -> bool {
 /// Dangerous exec modules whose presence justifies P001 regex matching.
 /// Without these, exec() calls are benign (regex.exec, db.exec, cursor.exec).
 const DANGEROUS_EXEC_MODULES: &[&str] = &["child_process", "shelljs", "execa", "cross-spawn"];
+
+/// Fast pre-filter for the WalkDir: only let through files worth scanning.
+/// This runs on every file entry in the walker, so it must be fast (no I/O).
+fn is_scannable_file(name: &str) -> bool {
+    // Must have an extension we care about
+    let ext = match name.rsplit('.').next() {
+        Some(e) => e,
+        None => return false,
+    };
+
+    // Code extensions we scan
+    let is_code = matches!(
+        ext,
+        "js" | "mjs"
+            | "cjs"
+            | "jsx"
+            | "ts"
+            | "mts"
+            | "cts"
+            | "tsx"
+            | "py"
+            | "pyw"
+            | "rb"
+            | "rake"
+            | "gemspec"
+            | "rs"
+            | "sh"
+            | "pth"
+            | "json"
+    );
+    if !is_code {
+        return false;
+    }
+
+    // Skip known non-useful code files
+    if name.ends_with(".min.js")
+        || name.ends_with(".min.mjs")
+        || name.ends_with(".min.cjs")
+        || name.ends_with(".bundle.js")
+        || name.ends_with(".d.ts")
+        || name.ends_with(".d.mts")
+        || name.ends_with(".d.cts")
+        || name.ends_with(".tsbuildinfo")
+        || name.ends_with(".map")
+    {
+        return false;
+    }
+
+    // Skip known non-useful filenames
+    !matches!(
+        name,
+        "README.md"
+            | "readme.md"
+            | "CHANGELOG.md"
+            | "changelog.md"
+            | "HISTORY.md"
+            | "LICENSE"
+            | "LICENSE.md"
+            | "license"
+    )
+}
 
 fn is_binary_ext(path: &Path) -> bool {
     match path.extension().and_then(|e| e.to_str()) {
