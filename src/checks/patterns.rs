@@ -277,28 +277,36 @@ fn collect_files_walkdir(root: &Path, extra_skip_dirs: &[String]) -> Vec<std::pa
     let mut files = Vec::new();
     for dep_dir_name in DEP_DIRS {
         let dep_dir = root.join(dep_dir_name);
-        if !dep_dir.exists() {
-            continue;
+        if dep_dir.exists() {
+            files.extend(collect_files_walkdir_single(&dep_dir, extra_skip_dirs));
         }
+    }
+    files
+}
 
-        let skip = extra_skip_dirs.to_vec();
-        for entry in WalkDir::new(&dep_dir)
-            .follow_links(false)
-            .max_depth(7)
-            .into_iter()
-            .filter_entry(move |e| {
-                if e.file_type().is_dir() {
-                    let name = e.file_name().to_str().unwrap_or("");
-                    return !should_skip_dir(name) && !skip.iter().any(|d| d == name);
-                }
+/// Walk a single dependency directory for scannable files.
+fn collect_files_walkdir_single(
+    dep_dir: &Path,
+    extra_skip_dirs: &[String],
+) -> Vec<std::path::PathBuf> {
+    let mut files = Vec::new();
+    let skip = extra_skip_dirs.to_vec();
+    for entry in WalkDir::new(dep_dir)
+        .follow_links(false)
+        .max_depth(7)
+        .into_iter()
+        .filter_entry(move |e| {
+            if e.file_type().is_dir() {
                 let name = e.file_name().to_str().unwrap_or("");
-                is_scannable_file(name)
-            })
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_file())
-        {
-            files.push(entry.into_path());
-        }
+                return !should_skip_dir(name) && !skip.iter().any(|d| d == name);
+            }
+            let name = e.file_name().to_str().unwrap_or("");
+            is_scannable_file(name)
+        })
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+    {
+        files.push(entry.into_path());
     }
     files
 }
@@ -375,6 +383,14 @@ fn scan_single_file(
                     || content.contains("`")
                     || content.contains("send(")
                     || content.contains("open(")
+                    || content.contains("require(")
+            }
+            Some(crate::ast::Lang::Rust) => {
+                content.contains("Command")
+                    || content.contains("unsafe")
+                    || content.contains("extern")
+                    || content.contains("include_bytes")
+                    || content.contains("include_str")
             }
             _ => false,
         };
@@ -388,8 +404,20 @@ fn scan_single_file(
                 "DEPSEC-P008" => "Expected for template engines — verify template inputs are properly escaped",
                 "DEPSEC-P013" => "Dynamic require() is almost never legitimate in dependencies — this is a strong malware indicator",
                 "DEPSEC-P014" => "Legitimate code rarely combines charCodeAt with XOR — this is a strong obfuscation indicator",
+                "DEPSEC-P020" => "eval()/exec()/compile() execute arbitrary code — verify input is trusted",
+                "DEPSEC-P021" => "subprocess with shell=True allows command injection — use shell=False with arg list",
+                "DEPSEC-P022" => "os.system()/os.popen() execute shell commands — use subprocess with shell=False",
+                "DEPSEC-P023" => "__import__() with variable arg enables dynamic module loading — strong malware indicator",
                 "DEPSEC-P024" => "Never deserialize untrusted pickle data — pickle.loads executes arbitrary code",
+                "DEPSEC-P030" => "eval/instance_eval execute arbitrary code — verify input is trusted",
+                "DEPSEC-P031" => "Shell execution detected — verify commands are static, not user-controlled",
+                "DEPSEC-P032" => "Dynamic dispatch via send/public_send — verify method name is not attacker-controlled",
+                "DEPSEC-P033" => "Dynamic require with variable arg — verify loaded module path is trusted",
                 "DEPSEC-P034" => "open(\"|\") spawns a shell command — avoid with untrusted input",
+                "DEPSEC-P040" => "Command::new() spawns a process — verify command is static, not attacker-controlled",
+                "DEPSEC-P041" => "unsafe block bypasses Rust memory safety — review for memory corruption risks",
+                "DEPSEC-P042" => "FFI boundary — memory safety not guaranteed across extern calls",
+                "DEPSEC-P043" => "Embeds file contents at compile time — verify included files are trusted",
                 _ => "Review this dependency for suspicious behavior",
             };
             findings.push(
@@ -506,7 +534,7 @@ impl Check for PatternsCheck {
         }
 
         // Collect files to scan: lockfile-driven (fast) or WalkDir fallback (slow)
-        let files_to_scan = if has_lockfile && !packages_to_scan.is_empty() {
+        let mut files_to_scan = if has_lockfile && !packages_to_scan.is_empty() {
             // FAST PATH: iterate only packages that need scanning, shallow walk each
             collect_files_from_lockfile(ctx.root, &packages_to_scan, &ctx.config.patterns.skip_dirs)
         } else if has_lockfile {
@@ -516,6 +544,30 @@ impl Check for PatternsCheck {
             // FALLBACK: no lockfile — full WalkDir (old behavior)
             collect_files_walkdir(ctx.root, &ctx.config.patterns.skip_dirs)
         };
+
+        // Also scan dep dirs NOT covered by lockfile packages (multi-ecosystem support).
+        // E.g., if we have npm lockfile but project also has .venv or vendor/, walk those too.
+        if has_lockfile {
+            let covered_dirs: std::collections::HashSet<String> = lock_packages
+                .iter()
+                .filter_map(|p| {
+                    p.dir_path.as_ref().and_then(|dp| {
+                        // Extract top-level dep dir from dir_path (e.g., "node_modules/foo" → "node_modules")
+                        dp.split('/').next().map(|s| s.to_string())
+                    })
+                })
+                .collect();
+            for dep_dir_name in DEP_DIRS {
+                if !covered_dirs.contains(*dep_dir_name) {
+                    let dep_dir = ctx.root.join(dep_dir_name);
+                    if dep_dir.exists() {
+                        let extra =
+                            collect_files_walkdir_single(&dep_dir, &ctx.config.patterns.skip_dirs);
+                        files_to_scan.extend(extra);
+                    }
+                }
+            }
+        }
 
         if !files_to_scan.is_empty() && has_lockfile {
             let total = if packages_to_scan.is_empty() {

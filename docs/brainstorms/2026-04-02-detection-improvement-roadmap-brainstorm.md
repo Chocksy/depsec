@@ -240,8 +240,28 @@ All 13 vectors closed across 4 commits:
 - [x] Directory-level pruning for cached packages
 - [x] **CRITICAL: Lockfile-driven scanner** (Phase 1+2 complete)
 
+### Sprint 7: Multi-Language Parity (NEW — 2026-04-06)
+- [x] Fix Rust AST gate (`needs_ast` returned false for .rs — P040-P043 were dead code)
+- [x] Add Ruby `require(` to needs_ast gate (P033 was unreachable)
+- [x] Multi-language capability model (Python: 10 network + exec + fs + env modules)
+- [x] Ruby capability detection (net/http, httparty, faraday, system, ENV, File.read/write)
+- [x] Rust capability detection (reqwest, hyper, Command::new, std::env, std::fs, libloading)
+- [x] Generalize capability scanner — scans .venv/, vendor/bundle/, not just node_modules
+- [x] Python/Ruby/Rust install hook detection (setup.py cmdclass, gemspec extensions, build.rs)
+- [x] 12 new hornets nest scan tests (4 Python AST, 4 Ruby AST, 4 Rust AST)
+- [x] 30+ new capability unit tests (Python, Ruby, Rust detection + integration)
+- [x] AST suggestion text for all P020-P043 rules
+
 ### Detection: 36/37 (97.3%)
 1 remaining gap: E02 (Proxy wrapping — requires runtime analysis, intentionally unsolvable statically)
+
+### Multi-language parity:
+- JS/TS: 9 AST rules + 14 regex rules + 9 capabilities + 8 COMBO rules
+- Python: 5 AST rules (P020-P024) + capability detection (network, exec, fs, env, dynamic, install hooks)
+- Ruby: 5 AST rules (P030-P034) + capability detection (network, exec, fs, env, install hooks)
+- Rust: 4 AST rules (P040-P043) + capability detection (network, exec, fs, env, dynamic, build.rs)
+- Hornets nest: 34 tests total (16 JS scan + 6 JS evasion + 4 Python + 4 Ruby + 4 Rust)
+- 497 tests total, 0 warnings, 0 clippy issues
 
 ### Real-world validation:
 - Planted malicious Python package in CEMS → all 3 techniques detected (P021+P024+P003)

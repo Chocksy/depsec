@@ -67,7 +67,9 @@ impl PackageCapabilities {
 
 // --- Module lists for capability detection ---
 
-const NETWORK_MODULES: &[&str] = &[
+// --- JavaScript/Node.js module lists ---
+
+const JS_NETWORK_MODULES: &[&str] = &[
     "http",
     "https",
     "net",
@@ -90,9 +92,58 @@ const NETWORK_MODULES: &[&str] = &[
     "isomorphic-fetch",
 ];
 
-const EXEC_MODULES: &[&str] = &["child_process", "node:child_process"];
+const JS_EXEC_MODULES: &[&str] = &["child_process", "node:child_process"];
 
-const FS_MODULES: &[&str] = &["fs", "fs/promises", "node:fs", "node:fs/promises"];
+const JS_FS_MODULES: &[&str] = &["fs", "fs/promises", "node:fs", "node:fs/promises"];
+
+// --- Python module lists ---
+
+const PY_NETWORK_MODULES: &[&str] = &[
+    "requests",
+    "urllib",
+    "urllib3",
+    "httpx",
+    "aiohttp",
+    "socket",
+    "http.client",
+    "http",
+    "pycurl",
+    "treq",
+];
+
+const PY_EXEC_MODULES: &[&str] = &["subprocess", "os"];
+
+const PY_FS_MODULES: &[&str] = &["pathlib", "shutil", "os.path", "os", "io"];
+
+// --- Ruby module lists ---
+
+const RB_NETWORK_MODULES: &[&str] = &[
+    "net/http",
+    "httparty",
+    "faraday",
+    "rest-client",
+    "typhoeus",
+    "open-uri",
+    "excon",
+    "curb",
+    "httpclient",
+];
+
+const RB_EXEC_MODULES: &[&str] = &["open3", "shellwords"];
+
+// --- Rust module lists ---
+
+const RS_NETWORK_MODULES: &[&str] = &[
+    "reqwest",
+    "hyper",
+    "ureq",
+    "surf",
+    "attohttpc",
+    "isahc",
+    "curl",
+];
+
+const RS_EXEC_KEYWORDS: &[&str] = &["Command::new", "std::process::Command"];
 
 const FS_READ_METHODS: &[&str] = &[
     "readFile",
@@ -220,74 +271,102 @@ impl Check for CapabilitiesCheck {
     fn run(&self, ctx: &ScanContext) -> anyhow::Result<CheckResult> {
         let max_score = ctx.config.scoring.weight_for("capabilities") as f64;
 
-        let nm_dir = ctx.root.join("node_modules");
-        if !nm_dir.exists() {
-            return Ok(CheckResult::new(
-                "capabilities",
-                vec![],
-                max_score,
-                vec!["No node_modules found — skipping capability analysis".into()],
-            ));
-        }
-
         let user_allow = &ctx.config.capabilities.allow;
         let mut findings = Vec::new();
         let mut packages_scanned = 0;
         let mut packages_with_caps = 0;
 
-        // Scan each package
-        let entries = match std::fs::read_dir(&nm_dir) {
-            Ok(e) => e,
-            Err(_) => {
-                return Ok(CheckResult::new(
-                    "capabilities",
-                    vec![],
-                    max_score,
-                    vec!["Could not read node_modules".into()],
-                ))
-            }
-        };
+        // Dependency directories to scan (all ecosystems)
+        let dep_dirs: Vec<(&str, std::path::PathBuf)> = vec![
+            ("npm", ctx.root.join("node_modules")),
+            ("pip", ctx.root.join(".venv")),
+            ("pip", ctx.root.join("venv")),
+            ("gem", ctx.root.join("vendor")),
+        ];
 
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !path.is_dir() {
+        let mut any_dep_dir_exists = false;
+
+        for (ecosystem, dep_dir) in &dep_dirs {
+            if !dep_dir.exists() {
+                continue;
+            }
+            any_dep_dir_exists = true;
+
+            // For Python venvs, scan site-packages
+            let scan_root = if *ecosystem == "pip" {
+                // Find site-packages under .venv/lib/pythonX.Y/site-packages
+                find_site_packages(dep_dir).unwrap_or_else(|| dep_dir.clone())
+            } else if *ecosystem == "gem" {
+                // vendor/bundle/ruby/X.Y.Z/gems/
+                find_gem_dir(dep_dir).unwrap_or_else(|| dep_dir.clone())
+            } else {
+                dep_dir.clone()
+            };
+
+            if !scan_root.exists() {
                 continue;
             }
 
-            let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            let entries = match std::fs::read_dir(&scan_root) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
 
-            if dir_name.starts_with('.') {
-                continue;
-            }
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !path.is_dir() {
+                    continue;
+                }
 
-            if dir_name.starts_with('@') {
-                // Scoped packages
-                if let Ok(scoped) = std::fs::read_dir(&path) {
-                    for sub in scoped.flatten() {
-                        let sub_path = sub.path();
-                        if sub_path.is_dir() {
-                            let pkg_name = format!(
-                                "{}/{}",
-                                dir_name,
-                                sub_path.file_name().and_then(|n| n.to_str()).unwrap_or("")
-                            );
-                            if let Some(caps) = scan_package(&sub_path) {
-                                packages_scanned += 1;
-                                if caps.has_any() {
-                                    packages_with_caps += 1;
-                                    evaluate_package(&pkg_name, &caps, user_allow, &mut findings);
+                let dir_name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+                if dir_name.starts_with('.') || dir_name.starts_with('_') {
+                    continue;
+                }
+
+                if dir_name.starts_with('@') {
+                    // Scoped packages (npm)
+                    if let Ok(scoped) = std::fs::read_dir(&path) {
+                        for sub in scoped.flatten() {
+                            let sub_path = sub.path();
+                            if sub_path.is_dir() {
+                                let pkg_name = format!(
+                                    "{}/{}",
+                                    dir_name,
+                                    sub_path.file_name().and_then(|n| n.to_str()).unwrap_or("")
+                                );
+                                if let Some(caps) = scan_package(&sub_path) {
+                                    packages_scanned += 1;
+                                    if caps.has_any() {
+                                        packages_with_caps += 1;
+                                        evaluate_package(
+                                            &pkg_name,
+                                            &caps,
+                                            user_allow,
+                                            &mut findings,
+                                        );
+                                    }
                                 }
                             }
                         }
                     }
-                }
-            } else if let Some(caps) = scan_package(&path) {
-                packages_scanned += 1;
-                if caps.has_any() {
-                    packages_with_caps += 1;
-                    evaluate_package(dir_name, &caps, user_allow, &mut findings);
+                } else if let Some(caps) = scan_package(&path) {
+                    packages_scanned += 1;
+                    if caps.has_any() {
+                        packages_with_caps += 1;
+                        evaluate_package(dir_name, &caps, user_allow, &mut findings);
+                    }
                 }
             }
+        }
+
+        if !any_dep_dir_exists {
+            return Ok(CheckResult::new(
+                "capabilities",
+                vec![],
+                max_score,
+                vec!["No dependency directories found — skipping capability analysis".into()],
+            ));
         }
 
         let pass_messages = vec![format!(
@@ -304,14 +383,23 @@ impl Check for CapabilitiesCheck {
     }
 }
 
-/// Scan all JS files in a package directory to build capability profile.
+/// Source file extensions supported for capability analysis
+const CAP_SOURCE_EXTENSIONS: &[&str] = &[
+    "js", "mjs", "cjs", "ts", "mts", "cts", "jsx", "tsx", // JS/TS
+    "py", "pyw", // Python
+    "rb", "rake", "gemspec", // Ruby
+    "rs",      // Rust
+];
+
+/// Scan all source files in a package directory to build capability profile.
+/// Supports JS/TS, Python, Ruby, and Rust source files.
 /// Uses a two-pass approach to correctly detect cross-file capability combinations:
 /// Pass 1: detect base capabilities (network, fs_read, shell_exec, etc.)
 /// Pass 2: check credential paths across ALL files using aggregated fs_read state
 fn scan_package(pkg_dir: &Path) -> Option<PackageCapabilities> {
     let mut caps = PackageCapabilities::default();
 
-    // Check package.json for install hooks
+    // Check package.json for JS install hooks
     let pkg_json = pkg_dir.join("package.json");
     if pkg_json.exists() {
         if let Ok(content) = std::fs::read_to_string(&pkg_json) {
@@ -328,7 +416,22 @@ fn scan_package(pkg_dir: &Path) -> Option<PackageCapabilities> {
         }
     }
 
-    // Pass 1: Scan JS/TS source files and buffer contents for cross-file analysis
+    // Check setup.py for Python install hooks
+    let setup_py = pkg_dir.join("setup.py");
+    if setup_py.exists() {
+        if let Ok(content) = std::fs::read_to_string(&setup_py) {
+            if content.contains("cmdclass") {
+                caps.install_hook = true;
+            }
+        }
+    }
+
+    // Check for build.rs (Rust build script = install hook equivalent)
+    if pkg_dir.join("build.rs").exists() {
+        caps.install_hook = true;
+    }
+
+    // Pass 1: Scan source files and buffer contents for cross-file analysis
     let mut file_contents: Vec<String> = Vec::new();
 
     for entry in WalkDir::new(pkg_dir)
@@ -341,7 +444,7 @@ fn scan_package(pkg_dir: &Path) -> Option<PackageCapabilities> {
         let path = entry.path();
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
 
-        if !matches!(ext, "js" | "mjs" | "cjs" | "ts" | "mts" | "cts") {
+        if !CAP_SOURCE_EXTENSIONS.contains(&ext) {
             continue;
         }
 
@@ -357,6 +460,9 @@ fn scan_package(pkg_dir: &Path) -> Option<PackageCapabilities> {
             || filename.ends_with(".test.js")
             || filename.ends_with(".spec.js")
             || filename.ends_with(".min.js")
+            || filename.starts_with("test_")
+            || filename.ends_with("_test.py")
+            || filename.ends_with("_spec.rb")
         {
             continue;
         }
@@ -366,13 +472,11 @@ fn scan_package(pkg_dir: &Path) -> Option<PackageCapabilities> {
             Err(_) => continue,
         };
 
-        detect_capabilities(&content, &mut caps);
+        detect_capabilities_by_ext(ext, &content, &mut caps);
         file_contents.push(content);
     }
 
     // Pass 2: Cross-file credential path check.
-    // credential_read requires fs_read (from any file) + credential path (in any file).
-    // The per-file detect_capabilities may miss this if files are processed in wrong order.
     if caps.fs_read && !caps.credential_read {
         for content in &file_contents {
             if CREDENTIAL_PATHS.iter().any(|p| content.contains(p)) {
@@ -385,13 +489,12 @@ fn scan_package(pkg_dir: &Path) -> Option<PackageCapabilities> {
     Some(caps)
 }
 
-/// Detect capabilities from file content
-fn detect_capabilities(content: &str, caps: &mut PackageCapabilities) {
+/// Detect capabilities from JS/TS file content
+fn detect_capabilities_js(content: &str, caps: &mut PackageCapabilities) {
     // C1: Network capability
     if !caps.network {
-        for module in NETWORK_MODULES {
+        for module in JS_NETWORK_MODULES {
             if content.contains(module) {
-                // Verify it's an actual import, not just a string mention
                 let pattern = format!("require('{module}')");
                 let pattern2 = format!("require(\"{module}\")");
                 let pattern3 = format!("from '{module}'");
@@ -410,7 +513,7 @@ fn detect_capabilities(content: &str, caps: &mut PackageCapabilities) {
 
     // C4: Shell execution
     if !caps.shell_exec {
-        for module in EXEC_MODULES {
+        for module in JS_EXEC_MODULES {
             let pattern = format!("require('{module}')");
             let pattern2 = format!("require(\"{module}\")");
             let pattern3 = format!("from '{module}'");
@@ -428,7 +531,7 @@ fn detect_capabilities(content: &str, caps: &mut PackageCapabilities) {
 
     // C2/C3: Filesystem access
     if !caps.fs_read || !caps.fs_write {
-        let has_fs_import = FS_MODULES.iter().any(|m| {
+        let has_fs_import = JS_FS_MODULES.iter().any(|m| {
             let p1 = format!("require('{m}')");
             let p2 = format!("require(\"{m}\")");
             let p3 = format!("from '{m}'");
@@ -454,24 +557,12 @@ fn detect_capabilities(content: &str, caps: &mut PackageCapabilities) {
         caps.env_access = true;
     }
 
-    // C6: Credential file read
-    if !caps.credential_read && caps.fs_read {
-        for cred_path in CREDENTIAL_PATHS {
-            if content.contains(cred_path) {
-                caps.credential_read = true;
-                break;
-            }
-        }
-    }
-
-    // C8: Dynamic loading (look for P013-style patterns)
+    // C8: Dynamic loading
     if !caps.dynamic_load {
-        // Regex-level check: require followed by non-string arg
         let has_dynamic = content.contains("require(")
             && content.lines().any(|line| {
                 if let Some(pos) = line.find("require(") {
                     let after = &line[pos + 8..];
-                    // Check if the next non-whitespace char is NOT a quote
                     let trimmed = after.trim_start();
                     !trimmed.is_empty()
                         && !trimmed.starts_with('\'')
@@ -498,6 +589,307 @@ fn detect_capabilities(content: &str, caps: &mut PackageCapabilities) {
     {
         caps.obfuscated = true;
     }
+}
+
+/// Detect capabilities from Python file content
+fn detect_capabilities_python(content: &str, caps: &mut PackageCapabilities) {
+    // Network
+    if !caps.network {
+        for module in PY_NETWORK_MODULES {
+            let p1 = format!("import {module}");
+            let p2 = format!("from {module}");
+            if content.contains(&p1) || content.contains(&p2) {
+                caps.network = true;
+                break;
+            }
+        }
+    }
+
+    // Shell execution
+    if !caps.shell_exec {
+        for module in PY_EXEC_MODULES {
+            let p1 = format!("import {module}");
+            let p2 = format!("from {module}");
+            if content.contains(&p1) || content.contains(&p2) {
+                // For 'os', verify it's used for exec not just paths
+                if *module == "os"
+                    && !(content.contains("os.system")
+                        || content.contains("os.popen")
+                        || content.contains("os.exec"))
+                {
+                    continue;
+                }
+                caps.shell_exec = true;
+                break;
+            }
+        }
+    }
+
+    // Filesystem access
+    if !caps.fs_read || !caps.fs_write {
+        let has_fs = PY_FS_MODULES.iter().any(|m| {
+            let p1 = format!("import {m}");
+            let p2 = format!("from {m}");
+            content.contains(&p1) || content.contains(&p2)
+        }) || content.contains("open(");
+
+        if has_fs {
+            if !caps.fs_read
+                && (content.contains("open(")
+                    || content.contains(".read(")
+                    || content.contains("Path("))
+            {
+                caps.fs_read = true;
+            }
+            if !caps.fs_write
+                && (content.contains("'w'")
+                    || content.contains("\"w\"")
+                    || content.contains("shutil.copy")
+                    || content.contains("shutil.move"))
+            {
+                caps.fs_write = true;
+            }
+        }
+    }
+
+    // Environment access
+    if !caps.env_access && (content.contains("os.environ") || content.contains("os.getenv")) {
+        caps.env_access = true;
+    }
+
+    // Dynamic loading
+    if !caps.dynamic_load && (content.contains("__import__(") || content.contains("importlib")) {
+        caps.dynamic_load = true;
+    }
+
+    // Install hook: setup.py with cmdclass
+    if !caps.install_hook && content.contains("cmdclass") && content.contains("setup(") {
+        caps.install_hook = true;
+    }
+}
+
+/// Detect capabilities from Ruby file content
+fn detect_capabilities_ruby(content: &str, caps: &mut PackageCapabilities) {
+    // Network
+    if !caps.network {
+        for module in RB_NETWORK_MODULES {
+            let p1 = format!("require '{module}'");
+            let p2 = format!("require \"{module}\"");
+            if content.contains(&p1) || content.contains(&p2) {
+                caps.network = true;
+                break;
+            }
+        }
+        // Also check for URI.parse / Net::HTTP usage without require
+        if !caps.network
+            && (content.contains("Net::HTTP")
+                || content.contains("URI.parse")
+                || content.contains("HTTParty"))
+        {
+            caps.network = true;
+        }
+    }
+
+    // Shell execution
+    if !caps.shell_exec {
+        for module in RB_EXEC_MODULES {
+            let p1 = format!("require '{module}'");
+            let p2 = format!("require \"{module}\"");
+            if content.contains(&p1) || content.contains(&p2) {
+                caps.shell_exec = true;
+                break;
+            }
+        }
+        // Also check for bare system/exec/backtick
+        if !caps.shell_exec
+            && (content.contains("system(")
+                || content.contains("exec(")
+                || content.contains("IO.popen")
+                || content.contains('`'))
+        {
+            caps.shell_exec = true;
+        }
+    }
+
+    // Filesystem access
+    if !caps.fs_read || !caps.fs_write {
+        if !caps.fs_read
+            && (content.contains("File.read")
+                || content.contains("File.open")
+                || content.contains("IO.read")
+                || content.contains("File.exist"))
+        {
+            caps.fs_read = true;
+        }
+        if !caps.fs_write
+            && (content.contains("File.write")
+                || content.contains("FileUtils.cp")
+                || content.contains("FileUtils.mv")
+                || content.contains("FileUtils.mkdir"))
+        {
+            caps.fs_write = true;
+        }
+    }
+
+    // Environment access
+    if !caps.env_access && (content.contains("ENV[") || content.contains("ENV.fetch")) {
+        caps.env_access = true;
+    }
+
+    // Dynamic loading
+    if !caps.dynamic_load {
+        // Check for require with variable (not string literal)
+        if content.contains("Kernel.load") {
+            caps.dynamic_load = true;
+        }
+    }
+
+    // Install hook: gemspec with extensions
+    if !caps.install_hook
+        && content.contains("extensions")
+        && content.contains("Gem::Specification")
+    {
+        caps.install_hook = true;
+    }
+}
+
+/// Detect capabilities from Rust file content
+fn detect_capabilities_rust(content: &str, caps: &mut PackageCapabilities) {
+    // Network
+    if !caps.network {
+        for module in RS_NETWORK_MODULES {
+            let p1 = format!("use {module}");
+            let p2 = format!("extern crate {module}");
+            if content.contains(&p1) || content.contains(&p2) {
+                caps.network = true;
+                break;
+            }
+        }
+        // std::net
+        if !caps.network && content.contains("std::net") {
+            caps.network = true;
+        }
+    }
+
+    // Shell execution
+    if !caps.shell_exec {
+        for kw in RS_EXEC_KEYWORDS {
+            if content.contains(kw) {
+                caps.shell_exec = true;
+                break;
+            }
+        }
+    }
+
+    // Filesystem access
+    if !caps.fs_read || !caps.fs_write {
+        if !caps.fs_read
+            && (content.contains("std::fs::read")
+                || content.contains("File::open")
+                || content.contains("fs::read"))
+        {
+            caps.fs_read = true;
+        }
+        if !caps.fs_write
+            && (content.contains("std::fs::write")
+                || content.contains("File::create")
+                || content.contains("fs::write"))
+        {
+            caps.fs_write = true;
+        }
+    }
+
+    // Environment access
+    if !caps.env_access
+        && (content.contains("std::env")
+            || content.contains("env::var")
+            || content.contains("env::vars"))
+    {
+        caps.env_access = true;
+    }
+
+    // FFI / unsafe (relevant for Rust-specific risk)
+    if !caps.dynamic_load && (content.contains("libloading") || content.contains("dlopen")) {
+        caps.dynamic_load = true;
+    }
+
+    // Build script = install hook equivalent
+    if !caps.install_hook && content.contains("fn main()") {
+        // Only flag build.rs files (checked by caller via filename)
+    }
+}
+
+/// Dispatch capability detection based on file extension
+fn detect_capabilities_by_ext(ext: &str, content: &str, caps: &mut PackageCapabilities) {
+    match ext {
+        "js" | "mjs" | "cjs" | "ts" | "mts" | "cts" | "jsx" | "tsx" => {
+            detect_capabilities_js(content, caps);
+        }
+        "py" | "pyw" => {
+            detect_capabilities_python(content, caps);
+        }
+        "rb" | "rake" | "gemspec" => {
+            detect_capabilities_ruby(content, caps);
+        }
+        "rs" => {
+            detect_capabilities_rust(content, caps);
+        }
+        _ => {}
+    }
+
+    // C6: Credential file read (language-neutral)
+    if !caps.credential_read && caps.fs_read {
+        for cred_path in CREDENTIAL_PATHS {
+            if content.contains(cred_path) {
+                caps.credential_read = true;
+                break;
+            }
+        }
+    }
+}
+
+/// Find Python site-packages directory under a venv
+fn find_site_packages(venv_dir: &Path) -> Option<std::path::PathBuf> {
+    let lib_dir = venv_dir.join("lib");
+    if !lib_dir.exists() {
+        return None;
+    }
+    // Look for lib/pythonX.Y/site-packages
+    if let Ok(entries) = std::fs::read_dir(&lib_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with("python") {
+                let sp = entry.path().join("site-packages");
+                if sp.exists() {
+                    return Some(sp);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Find Ruby gems directory under vendor/bundle
+fn find_gem_dir(vendor_dir: &Path) -> Option<std::path::PathBuf> {
+    let bundle_dir = vendor_dir.join("bundle");
+    if !bundle_dir.exists() {
+        return None;
+    }
+    // vendor/bundle/ruby/X.Y.Z/gems/
+    let ruby_dir = bundle_dir.join("ruby");
+    if !ruby_dir.exists() {
+        return None;
+    }
+    if let Ok(entries) = std::fs::read_dir(&ruby_dir) {
+        for entry in entries.flatten() {
+            let gems = entry.path().join("gems");
+            if gems.exists() {
+                return Some(gems);
+            }
+        }
+    }
+    None
 }
 
 /// Evaluate a package's capabilities against combination rules.
@@ -551,7 +943,7 @@ mod tests {
     #[test]
     fn test_detect_network_require() {
         let mut caps = PackageCapabilities::default();
-        detect_capabilities("const http = require('http');\nhttp.get('url');", &mut caps);
+        detect_capabilities_js("const http = require('http');\nhttp.get('url');", &mut caps);
         assert!(
             caps.network,
             "Should detect network capability from require('http')"
@@ -561,7 +953,7 @@ mod tests {
     #[test]
     fn test_detect_network_import() {
         let mut caps = PackageCapabilities::default();
-        detect_capabilities("import fetch from 'node-fetch';", &mut caps);
+        detect_capabilities_js("import fetch from 'node-fetch';", &mut caps);
         assert!(
             caps.network,
             "Should detect network capability from import node-fetch"
@@ -571,7 +963,7 @@ mod tests {
     #[test]
     fn test_detect_shell_exec() {
         let mut caps = PackageCapabilities::default();
-        detect_capabilities(
+        detect_capabilities_js(
             "const cp = require('child_process');\ncp.exec('ls');",
             &mut caps,
         );
@@ -581,7 +973,7 @@ mod tests {
     #[test]
     fn test_detect_fs_read() {
         let mut caps = PackageCapabilities::default();
-        detect_capabilities(
+        detect_capabilities_js(
             "const fs = require('fs');\nfs.readFileSync('file.txt');",
             &mut caps,
         );
@@ -592,7 +984,7 @@ mod tests {
     #[test]
     fn test_detect_fs_write() {
         let mut caps = PackageCapabilities::default();
-        detect_capabilities(
+        detect_capabilities_js(
             "const fs = require('fs');\nfs.writeFileSync('out.txt', data);",
             &mut caps,
         );
@@ -602,14 +994,15 @@ mod tests {
     #[test]
     fn test_detect_env_access() {
         let mut caps = PackageCapabilities::default();
-        detect_capabilities("const key = process.env.API_KEY;", &mut caps);
+        detect_capabilities_js("const key = process.env.API_KEY;", &mut caps);
         assert!(caps.env_access, "Should detect env access");
     }
 
     #[test]
     fn test_detect_credential_read() {
         let mut caps = PackageCapabilities::default();
-        detect_capabilities(
+        detect_capabilities_by_ext(
+            "js",
             "const fs = require('fs');\nconst key = fs.readFileSync('~/.ssh/id_rsa');",
             &mut caps,
         );
@@ -620,14 +1013,14 @@ mod tests {
     #[test]
     fn test_detect_dynamic_load() {
         let mut caps = PackageCapabilities::default();
-        detect_capabilities("const m = require(decoded);", &mut caps);
+        detect_capabilities_js("const m = require(decoded);", &mut caps);
         assert!(caps.dynamic_load, "Should detect dynamic require");
     }
 
     #[test]
     fn test_static_require_not_dynamic() {
         let mut caps = PackageCapabilities::default();
-        detect_capabilities("const fs = require('fs');", &mut caps);
+        detect_capabilities_js("const fs = require('fs');", &mut caps);
         assert!(
             !caps.dynamic_load,
             "Static require should NOT be flagged as dynamic"
@@ -637,14 +1030,14 @@ mod tests {
     #[test]
     fn test_detect_obfuscation() {
         let mut caps = PackageCapabilities::default();
-        detect_capabilities("function _0x3a2f() { while (!![]) { break; } }", &mut caps);
+        detect_capabilities_js("function _0x3a2f() { while (!![]) { break; } }", &mut caps);
         assert!(caps.obfuscated, "Should detect obfuscation");
     }
 
     #[test]
     fn test_clean_package_no_capabilities() {
         let mut caps = PackageCapabilities::default();
-        detect_capabilities(
+        detect_capabilities_js(
             "module.exports = function add(a, b) { return a + b; };",
             &mut caps,
         );
@@ -758,6 +1151,277 @@ mod tests {
             .collect();
         assert_eq!(critical.len(), 1);
         assert_eq!(critical[0].severity, Severity::Critical);
+    }
+
+    // --- Python capability detection ---
+
+    #[test]
+    fn test_python_network_requests() {
+        let mut caps = PackageCapabilities::default();
+        detect_capabilities_python(
+            "import requests\nrequests.get('http://example.com')",
+            &mut caps,
+        );
+        assert!(caps.network, "Should detect network from import requests");
+    }
+
+    #[test]
+    fn test_python_network_urllib() {
+        let mut caps = PackageCapabilities::default();
+        detect_capabilities_python("from urllib.request import urlopen", &mut caps);
+        assert!(caps.network, "Should detect network from urllib");
+    }
+
+    #[test]
+    fn test_python_shell_subprocess() {
+        let mut caps = PackageCapabilities::default();
+        detect_capabilities_python(
+            "import subprocess\nsubprocess.call(cmd, shell=True)",
+            &mut caps,
+        );
+        assert!(caps.shell_exec, "Should detect shell exec from subprocess");
+    }
+
+    #[test]
+    fn test_python_shell_os_system() {
+        let mut caps = PackageCapabilities::default();
+        detect_capabilities_python("import os\nos.system('rm -rf /')", &mut caps);
+        assert!(caps.shell_exec, "Should detect shell exec from os.system");
+    }
+
+    #[test]
+    fn test_python_env_access() {
+        let mut caps = PackageCapabilities::default();
+        detect_capabilities_python("key = os.environ['API_KEY']", &mut caps);
+        assert!(caps.env_access, "Should detect env access from os.environ");
+    }
+
+    #[test]
+    fn test_python_dynamic_import() {
+        let mut caps = PackageCapabilities::default();
+        detect_capabilities_python("mod = __import__(name)", &mut caps);
+        assert!(
+            caps.dynamic_load,
+            "Should detect dynamic loading from __import__"
+        );
+    }
+
+    #[test]
+    fn test_python_fs_read() {
+        let mut caps = PackageCapabilities::default();
+        detect_capabilities_python("f = open('/etc/passwd')\ndata = f.read()", &mut caps);
+        assert!(caps.fs_read, "Should detect fs read from open()");
+    }
+
+    #[test]
+    fn test_python_install_hook() {
+        let mut caps = PackageCapabilities::default();
+        detect_capabilities_python(
+            "from setuptools import setup\nsetup(cmdclass={'install': MyInstall})",
+            &mut caps,
+        );
+        assert!(
+            caps.install_hook,
+            "Should detect install hook from cmdclass"
+        );
+    }
+
+    // --- Ruby capability detection ---
+
+    #[test]
+    fn test_ruby_network_net_http() {
+        let mut caps = PackageCapabilities::default();
+        detect_capabilities_ruby("require 'net/http'\nNet::HTTP.get(uri)", &mut caps);
+        assert!(caps.network, "Should detect network from net/http");
+    }
+
+    #[test]
+    fn test_ruby_network_httparty() {
+        let mut caps = PackageCapabilities::default();
+        detect_capabilities_ruby("require 'httparty'\nHTTParty.get(url)", &mut caps);
+        assert!(caps.network, "Should detect network from httparty");
+    }
+
+    #[test]
+    fn test_ruby_shell_system() {
+        let mut caps = PackageCapabilities::default();
+        detect_capabilities_ruby("system('rm -rf /')", &mut caps);
+        assert!(caps.shell_exec, "Should detect shell exec from system()");
+    }
+
+    #[test]
+    fn test_ruby_shell_backtick() {
+        let mut caps = PackageCapabilities::default();
+        detect_capabilities_ruby("`ls -la`", &mut caps);
+        assert!(caps.shell_exec, "Should detect shell exec from backticks");
+    }
+
+    #[test]
+    fn test_ruby_env_access() {
+        let mut caps = PackageCapabilities::default();
+        detect_capabilities_ruby("key = ENV['API_KEY']", &mut caps);
+        assert!(caps.env_access, "Should detect env access from ENV[]");
+    }
+
+    #[test]
+    fn test_ruby_fs_read() {
+        let mut caps = PackageCapabilities::default();
+        detect_capabilities_ruby("data = File.read('/etc/passwd')", &mut caps);
+        assert!(caps.fs_read, "Should detect fs read from File.read");
+    }
+
+    #[test]
+    fn test_ruby_fs_write() {
+        let mut caps = PackageCapabilities::default();
+        detect_capabilities_ruby("File.write('out.txt', data)", &mut caps);
+        assert!(caps.fs_write, "Should detect fs write from File.write");
+    }
+
+    // --- Rust capability detection ---
+
+    #[test]
+    fn test_rust_network_reqwest() {
+        let mut caps = PackageCapabilities::default();
+        detect_capabilities_rust("use reqwest;\nreqwest::get(url).await?;", &mut caps);
+        assert!(caps.network, "Should detect network from reqwest");
+    }
+
+    #[test]
+    fn test_rust_network_std_net() {
+        let mut caps = PackageCapabilities::default();
+        detect_capabilities_rust("use std::net::TcpStream;", &mut caps);
+        assert!(caps.network, "Should detect network from std::net");
+    }
+
+    #[test]
+    fn test_rust_shell_command() {
+        let mut caps = PackageCapabilities::default();
+        detect_capabilities_rust(
+            "Command::new(\"sh\").arg(\"-c\").arg(cmd).output()?;",
+            &mut caps,
+        );
+        assert!(
+            caps.shell_exec,
+            "Should detect shell exec from Command::new"
+        );
+    }
+
+    #[test]
+    fn test_rust_env_access() {
+        let mut caps = PackageCapabilities::default();
+        detect_capabilities_rust("let key = std::env::var(\"API_KEY\")?;", &mut caps);
+        assert!(caps.env_access, "Should detect env access from std::env");
+    }
+
+    #[test]
+    fn test_rust_fs_read() {
+        let mut caps = PackageCapabilities::default();
+        detect_capabilities_rust("let data = std::fs::read(\"file.txt\")?;", &mut caps);
+        assert!(caps.fs_read, "Should detect fs read from std::fs::read");
+    }
+
+    #[test]
+    fn test_rust_fs_write() {
+        let mut caps = PackageCapabilities::default();
+        detect_capabilities_rust("std::fs::write(\"out.txt\", data)?;", &mut caps);
+        assert!(caps.fs_write, "Should detect fs write from std::fs::write");
+    }
+
+    #[test]
+    fn test_rust_dynamic_load() {
+        let mut caps = PackageCapabilities::default();
+        detect_capabilities_rust("use libloading::Library;", &mut caps);
+        assert!(
+            caps.dynamic_load,
+            "Should detect dynamic loading from libloading"
+        );
+    }
+
+    // --- Multi-language integration: scan_package ---
+
+    #[test]
+    fn test_scan_package_python() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let pkg_dir = dir.path().join("evil-py-pkg");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(
+            pkg_dir.join("__init__.py"),
+            "import requests\nimport os\nrequests.post(os.environ['API_KEY'])",
+        )
+        .unwrap();
+
+        let caps = scan_package(&pkg_dir).unwrap();
+        assert!(
+            caps.network,
+            "Python package should have network capability"
+        );
+        assert!(caps.env_access, "Python package should have env access");
+    }
+
+    #[test]
+    fn test_scan_package_ruby() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let pkg_dir = dir.path().join("evil-rb-pkg");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(
+            pkg_dir.join("lib.rb"),
+            "require 'net/http'\nsystem(ENV['CMD'])",
+        )
+        .unwrap();
+
+        let caps = scan_package(&pkg_dir).unwrap();
+        assert!(caps.network, "Ruby package should have network capability");
+        assert!(caps.shell_exec, "Ruby package should have shell exec");
+        assert!(caps.env_access, "Ruby package should have env access");
+    }
+
+    #[test]
+    fn test_scan_package_rust() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let pkg_dir = dir.path().join("evil-rs-pkg");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(
+            pkg_dir.join("main.rs"),
+            "use reqwest;\nuse std::env;\nlet key = env::var(\"SECRET\")?;",
+        )
+        .unwrap();
+
+        let caps = scan_package(&pkg_dir).unwrap();
+        assert!(caps.network, "Rust package should have network capability");
+        assert!(caps.env_access, "Rust package should have env access");
+    }
+
+    #[test]
+    fn test_scan_package_python_install_hook() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let pkg_dir = dir.path().join("hooked-py");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(
+            pkg_dir.join("setup.py"),
+            "from setuptools import setup\nsetup(cmdclass={'install': Evil})",
+        )
+        .unwrap();
+
+        let caps = scan_package(&pkg_dir).unwrap();
+        assert!(
+            caps.install_hook,
+            "Python setup.py with cmdclass = install hook"
+        );
+    }
+
+    #[test]
+    fn test_scan_package_rust_build_rs() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let pkg_dir = dir.path().join("build-rs-pkg");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(
+            pkg_dir.join("build.rs"),
+            "fn main() { /* compile C code */ }",
+        )
+        .unwrap();
+
+        let caps = scan_package(&pkg_dir).unwrap();
+        assert!(caps.install_hook, "Rust build.rs = install hook");
     }
 
     // Integration test with real package scanning
