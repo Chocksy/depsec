@@ -477,9 +477,9 @@ pub fn render_executive(report: &ScanReport, use_color: bool, persona: Persona) 
             "patterns" => {
                 if !runtime.is_empty() {
                     // Group by package
-                    let mut pkgs: BTreeMap<&str, usize> = BTreeMap::new();
+                    let mut pkgs: BTreeMap<String, usize> = BTreeMap::new();
                     for f in &runtime {
-                        let pkg = f.package.as_deref().unwrap_or("unknown");
+                        let pkg = f.display_label();
                         *pkgs.entry(pkg).or_default() += 1;
                     }
                     if !critical_high.is_empty() {
@@ -701,7 +701,7 @@ pub fn render_definitive(
 
     for (idx, result, _usage) in triage_results {
         let finding = &findings[*idx];
-        let pkg = finding.package.clone().unwrap_or_else(|| "unknown".into());
+        let pkg = finding.display_label();
 
         let entry = format!(
             "{}: {}",
@@ -900,7 +900,7 @@ fn render_deps_summary(
     // Group by package for collapsed view
     let mut by_package: BTreeMap<String, Vec<&Finding>> = BTreeMap::new();
     for f in findings {
-        let pkg = f.package.as_deref().unwrap_or("unknown").to_string();
+        let pkg = f.display_label();
         by_package.entry(pkg).or_default().push(f);
     }
 

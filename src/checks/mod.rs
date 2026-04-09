@@ -108,6 +108,36 @@ impl Finding {
         self
     }
 
+    /// Human-readable label for grouping: package name, or a meaningful fallback
+    /// derived from the rule category or file path. Never returns "unknown".
+    pub fn display_label(&self) -> String {
+        if let Some(ref pkg) = self.package {
+            return pkg.clone();
+        }
+        // Derive from rule_id prefix
+        match self.rule_id.as_str() {
+            r if r.starts_with("DEPSEC-W") => {
+                // Workflow findings: use the workflow file name
+                if let Some(ref file) = self.file {
+                    return format!("workflow:{}", file.rsplit('/').next().unwrap_or(file));
+                }
+                "workflows".into()
+            }
+            r if r.starts_with("DEPSEC-S") => "secrets".into(),
+            r if r.starts_with("DEPSEC-H") => "hygiene".into(),
+            r if r.starts_with("DEPSEC-V") => "dependencies".into(),
+            r if r.starts_with("DEPSEC-CAP") => "capabilities".into(),
+            _ => {
+                // Last resort: use file path
+                if let Some(ref file) = self.file {
+                    file.clone()
+                } else {
+                    "project".into()
+                }
+            }
+        }
+    }
+
     pub fn with_package(mut self, package: Option<String>) -> Self {
         self.package = package;
         self

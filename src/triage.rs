@@ -115,7 +115,7 @@ fn build_context(finding: &Finding, root: &Path) -> Option<FindingContext> {
         surrounding_code,
         imports,
         file_path: file.clone(),
-        package_name: finding.package.clone().unwrap_or_else(|| "unknown".into()),
+        package_name: finding.display_label(),
         line_number: line_num,
         rule_id: finding.rule_id.clone(),
         rule_description: finding.message.clone(),
@@ -191,10 +191,7 @@ pub fn dry_run_findings(findings: &[Finding], root: &Path, config: &TriageConfig
             total_chars += est_prompt_len;
 
             eprintln!("--- Finding {} ---", idx + 1);
-            eprintln!(
-                "Package: {}",
-                finding.package.as_deref().unwrap_or("unknown")
-            );
+            eprintln!("Package: {}", finding.display_label());
             eprintln!("Rule: {}", finding.rule_id);
             eprintln!("(no source file — advisory/metadata finding)");
             eprintln!(

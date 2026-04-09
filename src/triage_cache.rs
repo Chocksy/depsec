@@ -28,7 +28,7 @@ fn dirs_or_default() -> PathBuf {
 fn cache_key(finding: &Finding, root: &Path) -> Option<String> {
     let file = finding.file.as_ref()?;
     let line = finding.line?;
-    let package = finding.package.as_deref().unwrap_or("unknown");
+    let package = finding.display_label();
 
     // Read the file and hash the surrounding context (±10 lines)
     let full_path = root.join(file);
