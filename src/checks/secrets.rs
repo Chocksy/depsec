@@ -212,6 +212,29 @@ fn is_url_value(line: &str, re: &Regex) -> bool {
     false
 }
 
+/// Check if the matched "secret" value is a placeholder template.
+/// e.g., '__OPENROUTER_API_KEY__', '{{SECRET_KEY}}', 'REPLACE_ME'
+fn is_placeholder_value(line: &str, re: &Regex) -> bool {
+    if let Some(m) = re.find(line) {
+        let matched = m.as_str();
+        // Look for __PLACEHOLDER__ patterns in the matched text
+        if matched.contains("__") {
+            // Check if the quoted value is a __PLACEHOLDER__
+            for part in matched.split(&['\'', '"'][..]) {
+                let trimmed = part.trim();
+                if trimmed.starts_with("__") && trimmed.ends_with("__") && trimmed.len() > 4 {
+                    return true;
+                }
+            }
+        }
+        // {{PLACEHOLDER}} patterns
+        if matched.contains("{{") && matched.contains("}}") {
+            return true;
+        }
+    }
+    false
+}
+
 pub struct SecretsCheck;
 
 impl Check for SecretsCheck {
@@ -278,6 +301,11 @@ impl Check for SecretsCheck {
 
                         // Skip URL values flagged as secrets
                         if is_url_value(line, re) {
+                            continue;
+                        }
+
+                        // Skip placeholder templates: '__KEY__', '{{KEY}}', etc.
+                        if is_placeholder_value(line, re) {
                             continue;
                         }
 

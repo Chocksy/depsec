@@ -72,6 +72,12 @@ const VALUE_SHOWSTOPPERS: &[&str] = &[
     "delete ",   // SQL queries
     "cast(",     // SQL expressions
     "coalesce(", // SQL expressions
+    "min(",      // SQL aggregates
+    "max(",      // SQL aggregates
+    "count(",    // SQL aggregates
+    "sum(",      // SQL aggregates
+    "(-webkit-", // CSS media queries
+    "(min-",     // CSS media queries
     "./",        // File paths are not secrets
     "../",       // File paths
 ];
@@ -96,6 +102,17 @@ pub fn scan_for_secrets(root: &Path, files: &[std::path::PathBuf]) -> Vec<Findin
 
     for file in files {
         let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("");
+
+        // Skip minified JS files — single-letter vars + long values = false positives
+        let filename = file.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if filename.ends_with(".min.js")
+            || filename.ends_with(".min.mjs")
+            || filename.ends_with(".min.cjs")
+            || filename.ends_with(".bundle.js")
+        {
+            continue;
+        }
+
         let content = match std::fs::read_to_string(file) {
             Ok(c) => c,
             Err(_) => continue,
@@ -261,6 +278,17 @@ fn check_secret_candidate(
         return;
     }
 
+    // Check if value looks like a key name / identifier, not a secret value
+    // e.g., 'hubspot_token', 'pos.deviceSecret.', 'Unauthorized'
+    if is_key_name_not_secret(value) {
+        return;
+    }
+
+    // Check if value is a placeholder template: __SOME_VAR__, {{VAR}}, %{VAR}
+    if is_placeholder_template(value) {
+        return;
+    }
+
     let has_suspicious_name = SUSPICIOUS_NAMES.iter().any(|s| name_lower.contains(s));
 
     let entropy = shannon_entropy(value);
@@ -300,6 +328,10 @@ fn check_secret_candidate(
         );
     } else if entropy >= 4.5 && len >= 30 {
         // LOW: high entropy + long value, no name signal
+        // Skip single/two-letter variable names — minified code, not secrets
+        if name.len() <= 2 {
+            return;
+        }
         let masked = mask_value(value);
         findings.push(
             Finding::new(
@@ -336,6 +368,63 @@ fn is_sequential(s: &str) -> bool {
         .windows(2)
         .all(|w| w[1] == w[0] + 1 || w[1] == w[0] - 1);
     is_seq
+}
+
+/// Check if a value looks like a key name / identifier rather than a secret value.
+/// e.g., 'hubspot_token', 'pos.deviceSecret.', 'Unauthorized', 'not_authorized'
+/// Real secrets have high entropy and mixed char classes. Key names are readable words
+/// with dots, underscores, camelCase — they look like code identifiers.
+fn is_key_name_not_secret(value: &str) -> bool {
+    // Short values that are just words/identifiers (no mixed case + digits + symbols)
+    if value.len() <= 30 {
+        let has_upper = value.chars().any(|c| c.is_ascii_uppercase());
+        let has_digit = value.chars().any(|c| c.is_ascii_digit());
+        let has_special = value
+            .chars()
+            .any(|c| !c.is_alphanumeric() && c != '_' && c != '.' && c != '-');
+
+        // If it's just letters/underscores/dots (identifier-like), it's a key name
+        if !has_digit && !has_special {
+            return true;
+        }
+        // If it only has letters + underscores + dots (like 'pos.deviceSecret.'), it's a name
+        if !has_special && !has_digit && has_upper {
+            return true;
+        }
+    }
+
+    // Values that look like dotted key paths: 'pos.accessToken', 'app.config.key'
+    if value.contains('.')
+        && value
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '.' || c == '_')
+    {
+        return true;
+    }
+
+    false
+}
+
+/// Check if a value is a placeholder template, not a real secret.
+/// e.g., '__API_KEY__', '{{SECRET}}', '%{token}', '<API_KEY>'
+fn is_placeholder_template(value: &str) -> bool {
+    // __PLACEHOLDER__ pattern
+    if value.starts_with("__") && value.ends_with("__") {
+        return true;
+    }
+    // {{template}} pattern
+    if value.starts_with("{{") && value.ends_with("}}") {
+        return true;
+    }
+    // %{var} pattern (Ruby/ERB)
+    if value.starts_with("%{") && value.ends_with("}") {
+        return true;
+    }
+    // <PLACEHOLDER> pattern
+    if value.starts_with('<') && value.ends_with('>') && value.len() > 2 {
+        return true;
+    }
+    false
 }
 
 /// Mask a secret value for display: show first 4 and last 4 chars
