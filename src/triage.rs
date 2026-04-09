@@ -213,6 +213,38 @@ pub fn dry_run_findings(findings: &[Finding], root: &Path, config: &TriageConfig
 }
 
 /// Run triage on a set of findings using the LLM
+/// Findings that are always TRUE POSITIVE by definition — no LLM judgment needed.
+/// These are deterministic: the scanner already verified the condition with certainty.
+fn is_deterministic_true_positive(finding: &Finding) -> bool {
+    let rid = finding.rule_id.as_str();
+    // Workflow issues: action not pinned, permissions missing — binary check, always real
+    rid.starts_with("DEPSEC-W")
+        // Known vulnerabilities from advisory databases — always real
+        || rid.starts_with("DEPSEC-V")
+        // Hygiene issues: lockfile missing, outdated — always real
+        || rid.starts_with("DEPSEC-H")
+}
+
+/// Auto-resolve a deterministic finding without calling the LLM.
+fn auto_resolve(finding: &Finding) -> TriageResult {
+    let category = if finding.rule_id.starts_with("DEPSEC-W") {
+        "workflow security"
+    } else if finding.rule_id.starts_with("DEPSEC-V") {
+        "known vulnerability"
+    } else {
+        "project hygiene"
+    };
+    TriageResult {
+        classification: Classification::TruePositive,
+        confidence: 1.0,
+        reasoning: format!("Deterministic {category} finding — no LLM review needed"),
+        recommendation: finding
+            .suggestion
+            .clone()
+            .unwrap_or_else(|| "Review and fix".into()),
+    }
+}
+
 pub fn triage_findings(
     findings: &[Finding],
     root: &Path,
@@ -220,9 +252,31 @@ pub fn triage_findings(
     config: &TriageConfig,
 ) -> Vec<(usize, TriageResult, TokenUsage)> {
     let mut results = Vec::new();
-    let limit = findings.len().min(config.max_findings);
 
-    for (idx, finding) in findings.iter().enumerate().take(limit) {
+    // Split findings: deterministic ones are auto-resolved, ambiguous ones go to LLM
+    let mut ambiguous_indices = Vec::new();
+    let mut auto_resolved = 0;
+
+    for (idx, finding) in findings.iter().enumerate() {
+        if is_deterministic_true_positive(finding) {
+            results.push((idx, auto_resolve(finding), TokenUsage::default()));
+            auto_resolved += 1;
+        } else {
+            ambiguous_indices.push(idx);
+        }
+    }
+
+    if auto_resolved > 0 {
+        eprintln!(
+            "  {auto_resolved} deterministic finding{} auto-resolved (no LLM needed)",
+            if auto_resolved == 1 { "" } else { "s" }
+        );
+    }
+
+    let limit = ambiguous_indices.len().min(config.max_findings);
+
+    for (triage_num, &idx) in ambiguous_indices.iter().enumerate().take(limit) {
+        let finding = &findings[idx];
         let ctx = match build_context(finding, root) {
             Some(c) => c,
             None => continue,
@@ -232,7 +286,7 @@ pub fn triage_findings(
         if let Some(cached) = triage_cache::get_cached(finding, root, config.cache_ttl_days) {
             eprintln!(
                 "  Triaging {}/{}: {} {} [cached] {}",
-                idx + 1,
+                triage_num + 1,
                 limit,
                 ctx.package_name,
                 ctx.rule_id,
@@ -244,7 +298,7 @@ pub fn triage_findings(
 
         eprint!(
             "  Triaging {}/{}: {} {}... ",
-            idx + 1,
+            triage_num + 1,
             limit,
             ctx.package_name,
             ctx.rule_id

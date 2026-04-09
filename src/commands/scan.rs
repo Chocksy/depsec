@@ -124,14 +124,25 @@ pub fn run(root: &Path, opts: &ScanOpts) -> ExitCode {
                 if visible_findings.is_empty() {
                     vec![]
                 } else {
-                    let est_tokens = visible_findings.len() as u32 * 2000;
-                    let est_cost =
-                        client.estimate_cost(est_tokens, visible_findings.len() as u32 * 200);
+                    // Only ambiguous findings go to LLM — deterministic ones are free
+                    let ambiguous_count = visible_findings
+                        .iter()
+                        .filter(|f| {
+                            let rid = f.rule_id.as_str();
+                            !(rid.starts_with("DEPSEC-W")
+                                || rid.starts_with("DEPSEC-V")
+                                || rid.starts_with("DEPSEC-H"))
+                        })
+                        .count();
+                    let est_tokens = ambiguous_count as u32 * 2000;
+                    let est_cost = client.estimate_cost(est_tokens, ambiguous_count as u32 * 200);
 
                     if is_human {
                         eprintln!(
-                            "Triaging {} findings with {} (~${:.4})...\n",
+                            "Triaging {} findings ({} ambiguous → LLM, {} deterministic → auto) with {} (~${:.4})...\n",
                             visible_findings.len(),
+                            ambiguous_count,
+                            visible_findings.len() - ambiguous_count,
                             client.model(),
                             est_cost,
                         );
