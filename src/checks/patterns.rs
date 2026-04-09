@@ -440,7 +440,13 @@ fn scan_single_file(
         let normalized = normalize_confusables(raw_line);
         let line = &resolve_string_concat(&normalized);
         for (rule, re) in compiled {
-            if ast_handled && is_ast_rule(rule.rule_id) && is_js_or_ts(path) {
+            // Skip JS-only regex rules on non-JS files (Python/Ruby/Rust)
+            if is_js_only_rule(rule.rule_id) && !is_js_or_ts(path) {
+                continue;
+            }
+
+            // Suppress regex when AST already handled the same class of finding (all languages)
+            if ast_handled && is_ast_rule_for_lang(rule.rule_id, lang) {
                 continue;
             }
 
@@ -796,6 +802,43 @@ fn is_ast_rule(rule_id: &str) -> bool {
     matches!(rule_id, "DEPSEC-P001" | "DEPSEC-P008" | "DEPSEC-P013")
 }
 
+/// Language-aware AST suppression: when AST already analyzed a file, suppress
+/// the regex rules that overlap with AST findings for that language.
+fn is_ast_rule_for_lang(rule_id: &str, lang: Option<crate::ast::Lang>) -> bool {
+    match lang {
+        Some(crate::ast::Lang::JavaScript | crate::ast::Lang::TypeScript) => is_ast_rule(rule_id),
+        Some(crate::ast::Lang::Python) => {
+            // P001 (eval/exec) overlaps with P020/P021/P022 AST findings
+            matches!(rule_id, "DEPSEC-P001")
+        }
+        Some(crate::ast::Lang::Ruby) => {
+            // P001 (eval/exec) overlaps with P030/P031 AST findings
+            matches!(rule_id, "DEPSEC-P001")
+        }
+        Some(crate::ast::Lang::Rust) => {
+            // P001 (eval/exec) is not relevant to Rust
+            matches!(rule_id, "DEPSEC-P001")
+        }
+        _ => false,
+    }
+}
+
+/// Rules that are JS/TS-specific and should never fire on Python/Ruby/Rust files.
+/// These use JS-only APIs (process.env, require(), new Function, String.fromCharCode, etc.)
+fn is_js_only_rule(rule_id: &str) -> bool {
+    matches!(
+        rule_id,
+        "DEPSEC-P008"  // new Function() — JS only
+            | "DEPSEC-P011" // process.env serialization — JS only (Python uses os.environ)
+            | "DEPSEC-P013" // require() dynamic — JS/Node only
+            | "DEPSEC-P014" // String.fromCharCode — JS only
+            | "DEPSEC-P015" // unlinkSync/rmSync — Node.js only
+            | "DEPSEC-P017" // _0x hex obfuscation, while(!![])) — JS obfuscator patterns
+            | "DEPSEC-P018" // process.binding — Node.js internal
+            | "DEPSEC-P019" // vm.runInThisContext — Node.js vm module
+    )
+}
+
 /// Check if a file is JavaScript or TypeScript (for P001 gating)
 fn is_js_or_ts(path: &Path) -> bool {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
@@ -911,14 +954,26 @@ fn is_install_script(path: &Path, _line: &str) -> bool {
 }
 
 fn check_entropy(content: &str, file: &str, findings: &mut Vec<Finding>) {
+    // Skip .json files — structured data, not executable code
+    if file.ends_with(".json") {
+        return;
+    }
+
+    let mut hit_count = 0;
+
     for (line_num, line) in content.lines().enumerate() {
-        // Look for long strings (> 200 chars of non-whitespace)
+        // Look for long strings (> 300 chars of non-whitespace)
         for word in line.split_whitespace() {
             // Strip quotes
             let word = word.trim_matches(|c: char| c == '"' || c == '\'' || c == '`');
-            if word.len() > 200 {
+            if word.len() > 300 {
                 let entropy = shannon_entropy(word);
                 if entropy > 4.5 {
+                    hit_count += 1;
+                    // Skip files with >5 hits — likely a data file, not code
+                    if hit_count > 5 {
+                        return;
+                    }
                     findings.push(
                         Finding::new("DEPSEC-P007", Severity::Medium, format!(
                             "High-entropy string detected ({:.1} bits/char, {} chars)",

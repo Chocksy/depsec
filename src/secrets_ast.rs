@@ -63,7 +63,17 @@ const VALUE_SHOWSTOPPERS: &[&str] = &[
     "aaa",
     "example",
     "changeme",
-    "password", // literal "password" as value = placeholder
+    "password",  // literal "password" as value = placeholder
+    "http://",   // URLs are not secrets
+    "https://",  // URLs are not secrets
+    "select ",   // SQL queries are not secrets
+    "insert ",   // SQL queries
+    "update ",   // SQL queries
+    "delete ",   // SQL queries
+    "cast(",     // SQL expressions
+    "coalesce(", // SQL expressions
+    "./",        // File paths are not secrets
+    "../",       // File paths
 ];
 
 /// Scan source files for hardcoded secrets using AST + entropy

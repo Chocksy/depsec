@@ -139,6 +139,79 @@ const SECRET_PATTERNS: &[SecretPattern] = &[
     },
 ];
 
+/// Test/fixture directories where secrets are expected to be fake
+const SECRETS_TEST_DIRS: &[&str] = &[
+    "spec/",
+    "test/",
+    "tests/",
+    "__tests__/",
+    "fixtures/",
+    "factories/",
+    "e2e/",
+    "cypress/",
+    "docs/",
+];
+
+/// Check if a file is in a test/fixture directory (secrets are expected to be fake there)
+fn is_test_fixture_path(rel_path: &str) -> bool {
+    SECRETS_TEST_DIRS
+        .iter()
+        .any(|dir| rel_path.starts_with(dir) || rel_path.contains(&format!("/{dir}")))
+}
+
+/// Check if the matched "secret" is actually an ENV var reference, not a real secret.
+/// Catches: ENV['CLIENT_SECRET'], process.env.SECRET, os.environ['KEY'], ${VAR}
+fn is_env_var_reference(line: &str) -> bool {
+    // Ruby ERB templates: <%= ENV['...'] %>
+    if line.contains("<%=") || line.contains("<%") {
+        return true;
+    }
+    // Ruby: ENV['...'] or ENV.fetch('...')
+    if line.contains("ENV[") || line.contains("ENV.fetch") {
+        return true;
+    }
+    // JS/Node: process.env.SECRET
+    if line.contains("process.env") {
+        return true;
+    }
+    // Python: os.environ['...'], os.environ.get('...'), os.getenv('...')
+    if line.contains("os.environ") || line.contains("os.getenv") {
+        return true;
+    }
+    // Python Flask/Django: app.config.get('...'), settings.SECRET_KEY
+    if line.contains(".config.get(") || line.contains(".config[") {
+        return true;
+    }
+    // Shell: ${VAR} or $VAR
+    if line.contains("${") {
+        return true;
+    }
+    // YAML/ERB template interpolation: #{ENV['...']}
+    if line.contains("#{ENV") {
+        return true;
+    }
+    false
+}
+
+/// Check if the matched value is a URL, not a secret
+fn is_url_value(line: &str, re: &Regex) -> bool {
+    if let Some(m) = re.find(line) {
+        let matched = m.as_str();
+        // Check if the matched portion contains a URL
+        if matched.contains("http://") || matched.contains("https://") {
+            return true;
+        }
+        // Check surrounding context for URL patterns
+        let start = m.start().saturating_sub(10);
+        let end = (m.end() + 10).min(line.len());
+        let context = &line[start..end];
+        if context.contains("http://") || context.contains("https://") {
+            return true;
+        }
+    }
+    false
+}
+
 pub struct SecretsCheck;
 
 impl Check for SecretsCheck {
@@ -188,9 +261,26 @@ impl Check for SecretsCheck {
                 .to_string_lossy()
                 .to_string();
 
+            let in_test_dir = is_test_fixture_path(&rel_path);
+
             for (line_num, line) in content.lines().enumerate() {
+                // Skip lines that are ENV var references (not real secrets)
+                if is_env_var_reference(line) {
+                    continue;
+                }
+
                 for (sp, re) in &compiled_patterns {
                     if re.is_match(line) {
+                        // Skip test fixtures (JWTs, private keys in spec/ etc.)
+                        if in_test_dir {
+                            continue;
+                        }
+
+                        // Skip URL values flagged as secrets
+                        if is_url_value(line, re) {
+                            continue;
+                        }
+
                         let masked = mask_secret(line, re);
                         findings.push(
                             Finding::new(
@@ -225,6 +315,12 @@ impl Check for SecretsCheck {
         for af in ast_findings {
             let loc = (af.file.clone().unwrap_or_default(), af.line.unwrap_or(0));
             if !existing_locations.contains(&loc) {
+                // Apply same test dir filtering to AST findings
+                if let Some(ref file) = af.file {
+                    if is_test_fixture_path(file) {
+                        continue;
+                    }
+                }
                 findings.push(af);
             }
         }

@@ -238,7 +238,7 @@ fn find_dangerous_builtins(
             let line = fn_cap.node.start_position().row + 1;
 
             let severity = if arg_kind == "string" {
-                Severity::Medium // Static string eval
+                Severity::Low // Static string eval — standard in Python template engines
             } else {
                 Severity::High // Variable/expression eval
             };
@@ -429,7 +429,7 @@ fn find_dynamic_import(tree: &tree_sitter::Tree, source: &[u8], findings: &mut V
             let line = fn_cap.node.start_position().row + 1;
 
             let severity = if arg_kind == "string" {
-                Severity::Medium // __import__("os") — suspicious but static
+                Severity::Low // __import__("os") — standard Python compatibility pattern
             } else {
                 Severity::Critical // __import__(var) — dynamic, very suspicious
             };
@@ -623,14 +623,14 @@ mod tests {
     }
 
     #[test]
-    fn test_eval_static_string_medium() {
+    fn test_eval_static_string_low() {
         let findings = parse_py(r#"result = eval("1 + 2")"#);
         let p020: Vec<_> = findings
             .iter()
             .filter(|f| f.rule_id == "DEPSEC-P020")
             .collect();
         assert_eq!(p020.len(), 1);
-        assert_eq!(p020[0].severity, Severity::Medium);
+        assert_eq!(p020[0].severity, Severity::Low);
     }
 
     // --- P021: subprocess shell=True ---
@@ -691,14 +691,14 @@ mod tests {
     }
 
     #[test]
-    fn test_static_import_medium() {
+    fn test_static_import_low() {
         let findings = parse_py(r#"mod = __import__("os")"#);
         let p023: Vec<_> = findings
             .iter()
             .filter(|f| f.rule_id == "DEPSEC-P023")
             .collect();
         assert_eq!(p023.len(), 1);
-        assert_eq!(p023[0].severity, Severity::Medium);
+        assert_eq!(p023[0].severity, Severity::Low);
     }
 
     // --- Assignment extraction ---
