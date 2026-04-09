@@ -287,6 +287,11 @@ impl Check for SecretsCheck {
             let in_test_dir = is_test_fixture_path(&rel_path);
 
             for (line_num, line) in content.lines().enumerate() {
+                // Skip lines with inline suppression comments
+                if line.contains("depsec:allow") {
+                    continue;
+                }
+
                 // Skip lines that are ENV var references (not real secrets)
                 if is_env_var_reference(line) {
                     continue;

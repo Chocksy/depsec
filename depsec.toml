@@ -1,7 +1,7 @@
 # DepSec self-scan configuration (dogfooding)
 [ignore]
 # Test fixture files contain fake secrets — ignore them
-secrets = ["src/checks/secrets.rs", "src/canary.rs", "src/secrets_ast.rs"]
+secrets = ["src/checks/secrets.rs", "src/canary.rs", "src/secrets_ast.rs", "src/ast/ruby.rs", "src/ast/rust_lang.rs"]
 
 [checks]
 enabled = ["workflows", "deps", "patterns", "secrets", "hygiene"]

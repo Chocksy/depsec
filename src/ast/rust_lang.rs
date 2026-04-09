@@ -468,6 +468,7 @@ use crate::config;
     #[test]
     fn test_extract_assignments() {
         let mut parser = new_parser();
+        // gitleaks:allow — test fixture, not a real secret
         let assignments = extract_assignments(
             &mut parser,
             r#"
