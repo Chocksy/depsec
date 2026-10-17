@@ -168,11 +168,14 @@ The protection pipeline:
 Send findings to an LLM for classification (requires [OpenRouter](https://openrouter.ai) API key):
 
 ```sh
-depsec scan . --triage              # Real triage via LLM
-depsec scan . --triage-dry-run      # Preview what would be sent
+depsec scan . --triage                        # Real triage via LLM
+depsec scan . --triage-dry-run                # Preview what would be sent
+depsec scan . --triage --triage-prefilter d1  # Cheap d1 first pass, LLM for the rest
 ```
 
-Results are cached (30-day TTL) so repeat scans don't re-query.
+Results are cached (30-day TTL) so repeat scans don't re-query. Each verdict shows which stage decided it (`deterministic`, `prefilter`, `llm`, `cache`) plus its API cost and latency.
+
+The optional `d1` prefilter (Liquid d1-ultra via OpenRouter, ~70x cheaper than Sonnet) auto-clears a finding only as a false positive at >= 95% confidence; malware, supply-chain and secret findings always go to the LLM. It sends only a small code snippet, never whole files. Off by default. Details and the eval command: [docs/triage-prefilter.md](docs/triage-prefilter.md).
 
 ### Deep Package Audit
 
@@ -357,6 +360,10 @@ model = "anthropic/claude-sonnet-4-6"    # LLM model for triage
 max_findings = 20                         # Max findings to triage per run
 timeout_seconds = 60
 cache_ttl_days = 30
+prefilter = ""                            # "d1" enables the cheap first pass (off by default)
+prefilter_model = "liquid/d1-ultra"
+prefilter_fp_threshold = 0.95             # Auto-mark FP only at/above this confidence
+prefilter_snippet_lines = 3               # Code lines sent to the prefilter around the flagged line
 ```
 
 Global preferences are stored at `~/.depsec/config.toml` (created by `depsec setup`).

@@ -119,6 +119,16 @@ pub struct TriageConfig {
     pub timeout_seconds: u64,
     /// Cache TTL in days
     pub cache_ttl_days: u32,
+    /// First-pass prefilter: "" (off, default) or "d1" (Liquid d1 via OpenRouter)
+    pub prefilter: String,
+    /// OpenRouter model ID for the prefilter
+    pub prefilter_model: String,
+    /// Prefilter may auto-mark FP only at or above this confidence
+    pub prefilter_fp_threshold: f64,
+    /// Lines of code sent to the prefilter on each side of the flagged line
+    pub prefilter_snippet_lines: usize,
+    /// Extra rule-ID prefixes that always skip the prefilter (additive to built-ins)
+    pub prefilter_always_llm: Vec<String>,
 }
 
 impl Default for TriageConfig {
@@ -129,6 +139,11 @@ impl Default for TriageConfig {
             max_findings: 50,
             timeout_seconds: 60,
             cache_ttl_days: 30,
+            prefilter: String::new(),
+            prefilter_model: "liquid/d1-ultra".into(),
+            prefilter_fp_threshold: 0.95,
+            prefilter_snippet_lines: 3,
+            prefilter_always_llm: vec![],
         }
     }
 }
@@ -521,5 +536,27 @@ watch_paths = ["~/.npmrc"]
         assert!(config.install.attestation);
         assert_eq!(config.install.sandbox, "docker");
         assert_eq!(config.install.watch_paths, vec!["~/.npmrc"]);
+    }
+
+    #[test]
+    fn test_parse_prefilter_config() {
+        let cfg: Config = toml::from_str(
+            r#"
+[triage]
+prefilter = "d1"
+prefilter_fp_threshold = 0.98
+prefilter_snippet_lines = 5
+prefilter_always_llm = ["DEPSEC-P003"]
+"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.triage.prefilter, "d1");
+        assert_eq!(cfg.triage.prefilter_model, "liquid/d1-ultra");
+        assert_eq!(cfg.triage.prefilter_fp_threshold, 0.98);
+        assert_eq!(cfg.triage.prefilter_snippet_lines, 5);
+        assert_eq!(cfg.triage.prefilter_always_llm, vec!["DEPSEC-P003"]);
+        let d = TriageConfig::default();
+        assert!(d.prefilter.is_empty(), "prefilter must be off by default");
+        assert_eq!(d.prefilter_fp_threshold, 0.95);
     }
 }

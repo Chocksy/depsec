@@ -6,3 +6,4 @@ pub mod protect;
 pub mod scan;
 pub mod secrets;
 pub mod setup;
+pub mod triage_eval;

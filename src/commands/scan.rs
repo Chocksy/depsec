@@ -13,6 +13,7 @@ pub struct ScanOpts<'a> {
     pub triage: bool,
     pub triage_dry_run: bool,
     pub no_triage: bool,
+    pub triage_prefilter: Option<&'a str>,
     pub color: bool,
     pub full: bool,
 }
@@ -108,6 +109,22 @@ pub fn run(root: &Path, opts: &ScanOpts) -> ExitCode {
             };
 
             // Collect visible findings for triage
+            let prefilter_name = opts
+                .triage_prefilter
+                .unwrap_or(config.triage.prefilter.as_str());
+            let prefilter: Option<Box<dyn crate::triage_prefilter::DecisionApi>> = match (
+                llm_client.is_some(),
+                prefilter_name,
+            ) {
+                (false, _) | (true, "" | "none" | "off") => None,
+                (true, "d1") => crate::triage_prefilter::D1Client::from_config(&config.triage)
+                    .map(|c| Box::new(c) as Box<dyn crate::triage_prefilter::DecisionApi>),
+                (true, other) => {
+                    eprintln!("Warning: unknown triage prefilter '{other}' (expected 'd1'); skipping prefilter");
+                    None
+                }
+            };
+
             let visible_findings: Vec<crate::checks::Finding> = report
                 .results
                 .iter()
@@ -138,8 +155,12 @@ pub fn run(root: &Path, opts: &ScanOpts) -> ExitCode {
                     let est_cost = client.estimate_cost(est_tokens, ambiguous_count as u32 * 200);
 
                     if is_human {
+                        let pf = prefilter
+                            .as_ref()
+                            .map(|p| format!(", {} prefilter on", p.model()))
+                            .unwrap_or_default();
                         eprintln!(
-                            "Triaging {} findings ({} ambiguous → LLM, {} deterministic → auto) with {} (~${:.4})...\n",
+                            "Triaging {} findings ({} ambiguous → LLM, {} deterministic → auto) with {}{pf} (~${:.4})...\n",
                             visible_findings.len(),
                             ambiguous_count,
                             visible_findings.len() - ambiguous_count,
@@ -152,6 +173,7 @@ pub fn run(root: &Path, opts: &ScanOpts) -> ExitCode {
                         &visible_findings,
                         root,
                         client.as_ref(),
+                        prefilter.as_deref(),
                         &config.triage,
                     )
                 }

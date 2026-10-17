@@ -150,7 +150,7 @@ pub fn cache_stats() -> (usize, u64) {
 mod tests {
     use super::*;
     use crate::checks::{Confidence, Severity};
-    use crate::triage::Classification;
+    use crate::triage::{Classification, Stage};
 
     fn test_finding() -> Finding {
         Finding::new("DEPSEC-P001", Severity::High, "test finding")
@@ -204,6 +204,9 @@ mod tests {
             confidence: 0.95,
             reasoning: "Test reasoning".into(),
             recommendation: "Test recommendation".into(),
+            stage: Stage::Llm,
+            cost_usd: 0.0,
+            latency_ms: 0,
         };
 
         // Store
@@ -242,6 +245,9 @@ mod tests {
             confidence: 0.9,
             reasoning: "test".into(),
             recommendation: "test".into(),
+            stage: Stage::Llm,
+            cost_usd: 0.0,
+            latency_ms: 0,
         };
         let dir = tempfile::TempDir::new().unwrap();
         assert!(set_cached(&finding, dir.path(), &result).is_ok());
