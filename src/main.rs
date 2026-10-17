@@ -31,6 +31,7 @@ mod shellhook;
 mod spinner;
 mod triage;
 mod triage_cache;
+mod triage_prefilter;
 mod tui;
 mod utils;
 mod watchdog;
@@ -98,6 +99,9 @@ enum Commands {
         /// Skip LLM triage even if API key is available
         #[arg(long)]
         no_triage: bool,
+        /// Cheap first-pass classifier before the LLM: "d1" (Liquid d1 via OpenRouter)
+        #[arg(long, value_name = "NAME")]
+        triage_prefilter: Option<String>,
         /// Only check staged files (for pre-commit hook)
         #[arg(long)]
         staged: bool,
@@ -199,6 +203,18 @@ enum Commands {
         dry_run: bool,
         #[arg(long, default_value = "5.0")]
         budget: f64,
+    },
+
+    /// Compare the d1 prefilter against the LLM on real findings (paid; see docs/triage-prefilter.md)
+    TriageEval {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Maximum findings to evaluate
+        #[arg(long, default_value = "200")]
+        limit: usize,
+        /// Write per-finding results as JSON to this file
+        #[arg(long)]
+        out: Option<PathBuf>,
     },
 
     /// Manage detection rules
@@ -368,6 +384,7 @@ fn main() -> ExitCode {
             triage,
             triage_dry_run,
             no_triage,
+            triage_prefilter,
             staged,
         } => {
             // --staged mode: check staged files for secrets (pre-commit hook)
@@ -400,6 +417,7 @@ fn main() -> ExitCode {
                     triage,
                     triage_dry_run,
                     no_triage,
+                    triage_prefilter: triage_prefilter.as_deref(),
                     color,
                     full,
                 },
@@ -501,6 +519,14 @@ fn main() -> ExitCode {
                 Err(e) => return e,
             };
             commands::audit_cmd::run(&package, &root, dry_run, color, budget)
+        }
+
+        Commands::TriageEval { path, limit, out } => {
+            let root = match canonicalize_or_exit(&path) {
+                Ok(r) => r,
+                Err(e) => return e,
+            };
+            commands::triage_eval::run(&root, limit, out.as_deref())
         }
 
         Commands::Rules { action } => match action {

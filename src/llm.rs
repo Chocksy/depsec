@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
+pub(crate) const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
 // Used by from_env() — scaffolded for direct API usage without config file
 #[allow(dead_code)]
 const DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4-6";
