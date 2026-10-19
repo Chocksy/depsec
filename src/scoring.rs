@@ -73,7 +73,7 @@ pub fn compute_category_score(max_points: f64, findings: &[crate::checks::Findin
     // Sort findings by severity (Critical first) for deterministic scoring.
     // Without sorting, diminishing returns would vary based on finding order.
     let mut sorted: Vec<&crate::checks::Finding> = findings.iter().collect();
-    sorted.sort_by(|a, b| b.severity.cmp(&a.severity));
+    sorted.sort_by_key(|f| std::cmp::Reverse(f.severity));
 
     // Explicit loop (not .map()) for clarity — mutable counters track diminishing returns
     let mut medium_count = 0u32;

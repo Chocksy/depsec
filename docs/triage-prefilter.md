@@ -1,3 +1,31 @@
+# Triage (Liquid d1 via OpenRouter, no Sonnet tier)
+
+> **Changed:** triage is now d1-only. There is no Claude Sonnet / expensive LLM tier in `depsec scan --triage`.
+> depsec reads its own key from `DEPSEC_OPENROUTER_API_KEY` and does **not** fall back to `OPENROUTER_API_KEY`
+> unless you opt in with `triage.allow_shared_key = true` or `DEPSEC_ALLOW_SHARED_OPENROUTER_KEY=1`.
+> If no key is found, `--triage` prints setup help and triage is skipped.
+
+## Decision rules (current)
+
+| Finding | Result |
+|---|---|
+| Deterministic rule | Auto-resolved, no model call |
+| Protected family (list below) | Never sent to d1, never suppressed: NEEDS INVESTIGATION |
+| d1 says `FP` with confidence >= `prefilter_fp_threshold` (0.95) | FALSE POSITIVE |
+| d1 says `TP` | TRUE POSITIVE |
+| `FP` below the bar, `UNSURE`, or API error | NEEDS INVESTIGATION |
+
+## Eval
+
+`depsec triage-eval <corpus> --label tp|fp --limit 200 --out eval.json` runs d1 on a labelled corpus
+(tp = malware, fp = benign) and reports FP-filter precision/recall, malware TP recall, malware marked FP at
+the bar (must be 0), cost and latency. Secret findings (DEPSEC-S*) are never sent. Stops at `DEPSEC_EVAL_BUDGET`
+USD (default 0.95). Paid, never run in CI.
+
+---
+
+_Historical notes (original prefilter design) follow; key and Sonnet details below are superseded._
+
 # Triage prefilter (Liquid d1 via OpenRouter)
 
 `depsec scan --triage` sends every ambiguous finding to the triage LLM (Claude Sonnet 4.6 by default, about $3/M input tokens). The prefilter adds a cheap first pass with Liquid's `d1-ultra` decision model ($0.042/M input tokens, output free, served through OpenRouter's System One endpoint). It only auto-clears findings it is very sure are false positives. Everything else still goes to the LLM exactly as before.

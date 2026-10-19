@@ -70,6 +70,7 @@ pub struct TokenUsage {
 #[cfg_attr(test, mockall::automock)]
 pub trait LlmApi {
     fn chat(&self, messages: &[ChatMessage]) -> Result<ChatResponse>;
+    #[allow(dead_code)]
     fn model(&self) -> &str;
     fn estimate_cost(&self, input_tokens: u32, output_tokens: u32) -> f64;
 }
@@ -118,9 +119,7 @@ impl LlmClient {
     /// Create client from config, falling back to env
     pub fn from_config(config: &crate::config::TriageConfig) -> Option<Self> {
         // Try config's env var name first, then default OPENROUTER_API_KEY
-        let api_key = std::env::var(&config.api_key_env)
-            .or_else(|_| std::env::var("OPENROUTER_API_KEY"))
-            .ok()?;
+        let api_key = crate::config::resolve_api_key(config).ok()?;
         if api_key.is_empty() {
             return None;
         }
@@ -261,11 +260,11 @@ pub fn print_setup_instructions() {
     eprintln!("Setup:");
     eprintln!("  1. Get an API key at https://openrouter.ai/keys");
     eprintln!("  2. Set the environment variable:");
-    eprintln!("     export OPENROUTER_API_KEY=sk-or-...");
+    eprintln!("     export DEPSEC_OPENROUTER_API_KEY=sk-or-...   (depsec's own key)");
     eprintln!();
     eprintln!("Or configure in depsec.toml:");
     eprintln!("  [triage]");
-    eprintln!("  api_key_env = \"OPENROUTER_API_KEY\"");
+    eprintln!("  api_key_env = \"DEPSEC_OPENROUTER_API_KEY\"");
     eprintln!("  model = \"anthropic/claude-sonnet-4-6\"");
 }
 

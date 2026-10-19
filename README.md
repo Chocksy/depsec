@@ -355,7 +355,7 @@ capabilities = 10
 external_rules = 0                        # Opt-in: weight for custom rules
 
 [triage]
-api_key_env = "OPENROUTER_API_KEY"       # Env var containing API key
+api_key_env = "DEPSEC_OPENROUTER_API_KEY" # depsec's own key; no fallback to OPENROUTER_API_KEY unless allow_shared_key = true
 model = "anthropic/claude-sonnet-4-6"    # LLM model for triage
 max_findings = 20                         # Max findings to triage per run
 timeout_seconds = 60
