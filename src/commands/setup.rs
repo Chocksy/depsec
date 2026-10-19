@@ -61,7 +61,7 @@ fn run_wizard(opts: &SetupOpts) -> ExitCode {
     eprintln!("depsec v{} — Setup\n", env!("CARGO_PKG_VERSION"));
 
     // Build options with pre-selection based on existing config
-    let has_api_key = std::env::var("DEPSEC_OPENROUTER_API_KEY").is_ok();
+    let has_api_key = std::env::var(crate::config::DEPSEC_KEY_ENV).is_ok();
     let mut options = vec![
         tui::MultiSelectOption {
             label: "AI verdicts (OpenRouter)".into(),
