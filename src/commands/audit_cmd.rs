@@ -1,8 +1,6 @@
 use std::path::Path;
 use std::process::ExitCode;
 
-#[allow(unused_imports)]
-use crate::llm::LlmApi;
 use crate::{audit, config, llm};
 
 pub fn run(package: &str, root: &Path, dry_run: bool, color: bool, budget: f64) -> ExitCode {
@@ -23,7 +21,7 @@ pub fn run(package: &str, root: &Path, dry_run: bool, color: bool, budget: f64) 
                 &audit::AuditResult {
                     profile,
                     findings: vec![],
-                    total_tokens: 0,
+                    cost_usd: 0.0,
                     rounds: 0,
                 },
                 color,
@@ -32,7 +30,7 @@ pub fn run(package: &str, root: &Path, dry_run: bool, color: bool, budget: f64) 
         return ExitCode::SUCCESS;
     }
 
-    let client = match llm::LlmClient::from_config(&config.triage) {
+    let client = match crate::triage_prefilter::D1Client::from_config(&config.triage) {
         Some(c) => c,
         None => {
             llm::print_setup_instructions();

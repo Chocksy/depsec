@@ -163,28 +163,25 @@ The protection pipeline:
 3. **Network monitor** — polls connections every 100ms, classifies as expected/unexpected/critical
 4. **File watchdog** — monitors file descriptors across process tree, detects sensitive reads
 
-### LLM Triage
+### Triage (Liquid d1-ultra)
 
-Send findings to an LLM for classification (requires [OpenRouter](https://openrouter.ai) API key):
+Classify findings with Liquid's d1-ultra decision model on OpenRouter (about $0.00001 per finding). depsec uses its own key, `DEPSEC_OPENROUTER_API_KEY`; it never falls back to `OPENROUTER_API_KEY` unless you opt in (`triage.allow_shared_key = true` or `DEPSEC_ALLOW_SHARED_OPENROUTER_KEY=1`). There is no Sonnet/chat-LLM tier.
 
 ```sh
-depsec scan . --triage                        # Real triage via LLM
-depsec scan . --triage-dry-run                # Preview what would be sent
-depsec scan . --triage --triage-prefilter d1  # Cheap d1 first pass, LLM for the rest
+depsec scan . --triage            # d1 triage
+depsec scan . --triage-dry-run    # Preview what would be sent
 ```
 
-Results are cached (30-day TTL) so repeat scans don't re-query. Each verdict shows which stage decided it (`deterministic`, `prefilter`, `llm`, `cache`) plus its API cost and latency.
+A finding is marked FALSE POSITIVE only when d1 says FP at >= 95% confidence. Malware, typosquat, advisory, secret and install-script findings are never sent and never suppressed. Results are cached (30-day TTL). Details and the eval command: [docs/triage-prefilter.md](docs/triage-prefilter.md).
 
-The optional `d1` prefilter (Liquid d1-ultra via OpenRouter, ~70x cheaper than Sonnet) auto-clears a finding only as a false positive at >= 95% confidence; malware, supply-chain and secret findings always go to the LLM. It sends only a small code snippet, never whole files. Off by default. Details and the eval command: [docs/triage-prefilter.md](docs/triage-prefilter.md).
+### Package Audit
 
-### Deep Package Audit
-
-LLM-powered 4-phase analysis of a specific package:
+Static capability map of a package (shell, network, fs, eval, env, native), then one d1 verdict per capability site (up to 40). Suspicious sites are reported; sites d1 calls benign at >= 95% are dropped; the rest are listed for review. Same key rules as triage.
 
 ```sh
-depsec audit shelljs              # Deep audit
-depsec audit shelljs --dry-run    # Preview capabilities
-depsec audit shelljs --budget 2.0 # Cap LLM spend at $2.00
+depsec audit shelljs              # Audit
+depsec audit shelljs --dry-run    # Preview capabilities (no API calls)
+depsec audit shelljs --budget 0.05 # Cap d1 spend
 ```
 
 ## Usage
@@ -356,11 +353,10 @@ external_rules = 0                        # Opt-in: weight for custom rules
 
 [triage]
 api_key_env = "DEPSEC_OPENROUTER_API_KEY" # depsec's own key; no fallback to OPENROUTER_API_KEY unless allow_shared_key = true
-model = "anthropic/claude-sonnet-4-6"    # LLM model for triage
+allow_shared_key = false                 # true = may use OPENROUTER_API_KEY when the dedicated key is unset
 max_findings = 20                         # Max findings to triage per run
 timeout_seconds = 60
 cache_ttl_days = 30
-prefilter = ""                            # "d1" enables the cheap first pass (off by default)
 prefilter_model = "liquid/d1-ultra"
 prefilter_fp_threshold = 0.95             # Auto-mark FP only at/above this confidence
 prefilter_snippet_lines = 3               # Code lines sent to the prefilter around the flagged line

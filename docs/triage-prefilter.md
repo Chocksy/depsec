@@ -4,6 +4,7 @@
 > depsec reads its own key from `DEPSEC_OPENROUTER_API_KEY` and does **not** fall back to `OPENROUTER_API_KEY`
 > unless you opt in with `triage.allow_shared_key = true` or `DEPSEC_ALLOW_SHARED_OPENROUTER_KEY=1`.
 > If no key is found, `--triage` prints setup help and triage is skipped.
+> `depsec audit` uses the same d1 model and key rules (one verdict per capability site). The old Sonnet code has been removed.
 
 ## Decision rules (current)
 

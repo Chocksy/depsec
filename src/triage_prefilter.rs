@@ -16,7 +16,7 @@ use crate::config::TriageConfig;
 
 /// OpenRouter price for liquid/d1-ultra: $0.042 per 1M input tokens, output free.
 /// Used only when the response omits `usage.cost`.
-const D1_ULTRA_INPUT_PER_M: f64 = 0.042;
+pub const D1_ULTRA_INPUT_PER_M: f64 = 0.042;
 const MAX_LINE_CHARS: usize = 200;
 
 /// Rule-ID prefixes that are never auto-suppressed by the prefilter.
