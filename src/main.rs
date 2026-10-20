@@ -96,10 +96,10 @@ enum Commands {
         /// Show what would be sent to LLM
         #[arg(long)]
         triage_dry_run: bool,
-        /// Skip LLM triage even if API key is available
+        /// Skip d1 triage even if DEPSEC_OPENROUTER_API_KEY is set
         #[arg(long)]
         no_triage: bool,
-        /// Cheap first-pass classifier before the LLM: "d1" (Liquid d1 via OpenRouter)
+        /// Deprecated: d1 is now the only triage model (accepted for compatibility)
         #[arg(long, value_name = "NAME")]
         triage_prefilter: Option<String>,
         /// Only check staged files (for pre-commit hook)
@@ -201,7 +201,8 @@ enum Commands {
         path: PathBuf,
         #[arg(long)]
         dry_run: bool,
-        #[arg(long, default_value = "5.0")]
+        /// Max d1 spend in USD
+        #[arg(long, default_value = "0.05")]
         budget: f64,
     },
 

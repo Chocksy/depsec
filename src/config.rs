@@ -111,8 +111,6 @@ impl ScoringConfig {
 pub struct TriageConfig {
     /// Environment variable name holding the API key
     pub api_key_env: String,
-    /// Model to use for triage (OpenRouter model ID)
-    pub model: String,
     /// Maximum findings to triage per scan
     pub max_findings: usize,
     /// Timeout per API call in seconds
@@ -167,7 +165,6 @@ impl Default for TriageConfig {
     fn default() -> Self {
         Self {
             api_key_env: DEPSEC_KEY_ENV.into(),
-            model: "anthropic/claude-sonnet-4-6".into(),
             max_findings: 50,
             timeout_seconds: 60,
             cache_ttl_days: 30,
@@ -449,7 +446,6 @@ skip_dirs = ["custom-cache"]
         let config = TriageConfig::default();
         assert_eq!(config.api_key_env, "DEPSEC_OPENROUTER_API_KEY");
         assert!(!config.allow_shared_key);
-        assert_eq!(config.model, "anthropic/claude-sonnet-4-6");
         assert_eq!(config.max_findings, 50);
         assert_eq!(config.timeout_seconds, 60);
         assert_eq!(config.cache_ttl_days, 30);
@@ -477,7 +473,7 @@ cache_ttl_days = 7
 "#;
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.triage.api_key_env, "MY_KEY");
-        assert_eq!(config.triage.model, "gpt-4o");
+        // Legacy `model` key (old Sonnet tier) is accepted and ignored.
         assert_eq!(config.triage.max_findings, 10);
     }
 
