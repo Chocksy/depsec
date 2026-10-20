@@ -23,6 +23,24 @@ pub struct LockPackage {
 pub struct ScanCache {
     /// Map of "name@version" → integrity hash at time of last scan
     pub scanned: HashMap<String, String>,
+    /// depsec version + rules + scan-relevant config the entries were made with.
+    /// Empty (old cache files) or different → the cache is treated as empty.
+    #[serde(default)]
+    pub fingerprint: String,
+}
+
+/// Fingerprint of everything that changes scan output for an unchanged package:
+/// the depsec version, the pattern rule set, and the patterns/ignore config.
+pub fn fingerprint(config: &crate::config::Config) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    crate::checks::patterns::rules_signature().hash(&mut h);
+    let mut allow: Vec<_> = config.patterns.allow.iter().collect();
+    allow.sort();
+    allow.hash(&mut h);
+    config.patterns.skip_dirs.hash(&mut h);
+    config.ignore.patterns.hash(&mut h);
+    format!("{}-{:016x}", env!("CARGO_PKG_VERSION"), h.finish())
 }
 
 impl ScanCache {
@@ -31,6 +49,16 @@ impl ScanCache {
         let cache_path = root.join(".depsec/scan-cache.json");
         if let Ok(content) = std::fs::read_to_string(&cache_path) {
             serde_json::from_str(&content).unwrap_or_default()
+        } else {
+            Self::default()
+        }
+    }
+
+    /// Load the cache only if it was written with the same fingerprint.
+    pub fn load_valid(root: &Path, config: &crate::config::Config) -> Self {
+        let c = Self::load(root);
+        if c.fingerprint == fingerprint(config) {
+            c
         } else {
             Self::default()
         }
@@ -525,7 +553,9 @@ pub fn update_cache(root: &Path) {
         return;
     }
 
-    let mut cache = ScanCache::load(root);
+    let config = crate::config::load_config(root);
+    let mut cache = ScanCache::load_valid(root, &config);
+    cache.fingerprint = fingerprint(&config);
     cache.mark_scanned(&lock_packages);
     cache.prune(&lock_packages);
     cache.save(root);
@@ -669,5 +699,42 @@ mod tests {
         cache.prune(&current);
         assert_eq!(cache.scanned.len(), 1);
         assert!(cache.scanned.contains_key("lodash@4.17.21"));
+    }
+
+    #[test]
+    fn cache_without_or_with_other_fingerprint_is_ignored() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let cfg = crate::config::Config::default();
+        let pkgs = vec![LockPackage {
+            name: "a".into(),
+            version: "1".into(),
+            integrity: "x".into(),
+            dir_path: None,
+        }];
+        // Old-format cache (no fingerprint) must not be trusted.
+        let mut old = ScanCache::default();
+        old.mark_scanned(&pkgs);
+        old.save(dir.path());
+        assert_eq!(
+            ScanCache::load_valid(dir.path(), &cfg)
+                .packages_to_scan(&pkgs)
+                .len(),
+            1
+        );
+        // Matching fingerprint is trusted.
+        old.fingerprint = fingerprint(&cfg);
+        old.save(dir.path());
+        assert!(ScanCache::load_valid(dir.path(), &cfg)
+            .packages_to_scan(&pkgs)
+            .is_empty());
+        // Config change invalidates it.
+        let mut cfg2 = crate::config::Config::default();
+        cfg2.patterns.skip_dirs.push("extra".into());
+        assert_eq!(
+            ScanCache::load_valid(dir.path(), &cfg2)
+                .packages_to_scan(&pkgs)
+                .len(),
+            1
+        );
     }
 }

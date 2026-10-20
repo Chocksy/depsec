@@ -20,6 +20,15 @@ struct PatternRule {
     confidence: Confidence,
 }
 
+/// Stable signature of the built-in pattern rule set (for cache invalidation).
+pub fn rules_signature() -> String {
+    PATTERN_RULES
+        .iter()
+        .map(|r| format!("{}={}", r.rule_id, r.pattern))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 const PATTERN_RULES: &[PatternRule] = &[
     PatternRule {
         rule_id: "DEPSEC-P001",
@@ -503,7 +512,22 @@ impl Check for PatternsCheck {
         "patterns"
     }
 
+    /// Full scan: always scans every package. The scan cache is NOT used to
+    /// skip packages here, because the cache stores no findings: skipping
+    /// would silently drop findings of unchanged packages (stale-cache bug).
     fn run(&self, ctx: &ScanContext) -> anyhow::Result<CheckResult> {
+        self.run_inner(ctx, false)
+    }
+}
+
+impl PatternsCheck {
+    /// Delta scan for `depsec protect`: only new/changed packages since the
+    /// last cached scan (cache invalidated on version/rules/config change).
+    pub fn run_delta(&self, ctx: &ScanContext) -> anyhow::Result<CheckResult> {
+        self.run_inner(ctx, true)
+    }
+
+    fn run_inner(&self, ctx: &ScanContext, delta: bool) -> anyhow::Result<CheckResult> {
         let max_score = ctx.config.scoring.weight_for("patterns") as f64;
 
         let ignored_rules: Vec<&str> = ctx
@@ -526,10 +550,14 @@ impl Check for PatternsCheck {
         // Lock file-based caching: only scan new/changed packages
         let lock_packages = crate::scan_cache::parse_lockfile(ctx.root);
         let has_lockfile = !lock_packages.is_empty();
-        let cache = crate::scan_cache::ScanCache::load(ctx.root);
+        let cache = if delta {
+            crate::scan_cache::ScanCache::load_valid(ctx.root, ctx.config)
+        } else {
+            crate::scan_cache::ScanCache::default()
+        };
         let packages_to_scan = cache.packages_to_scan(&lock_packages);
 
-        if has_lockfile && packages_to_scan.is_empty() && !cache.scanned.is_empty() {
+        if delta && has_lockfile && packages_to_scan.is_empty() && !cache.scanned.is_empty() {
             pass_messages.push("All packages cached — no changes since last scan".into());
             return Ok(CheckResult::new(
                 self.name().to_string(),
@@ -2329,5 +2357,50 @@ mod tests {
             result.findings.iter().any(|f| f.rule_id == "DEPSEC-P019"),
             "Expected P019 finding for vm.runInThisContext()"
         );
+    }
+}
+
+#[cfg(test)]
+mod scan_cache_regression {
+    use super::*;
+    use crate::checks::{Check, ScanContext};
+
+    fn project() -> tempfile::TempDir {
+        let dir = tempfile::TempDir::new().unwrap();
+        let pkg = dir.path().join("node_modules/evil");
+        std::fs::create_dir_all(&pkg).unwrap();
+        std::fs::write(
+            pkg.join("package.json"),
+            r#"{"name":"evil","version":"1.0.0"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            pkg.join("index.js"),
+            "const cp = require('child_process');\ncp.exec(Buffer.from(process.env.X, 'base64').toString());\neval(atob(payload));\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("package-lock.json"),
+            r#"{"lockfileVersion":3,"packages":{"":{"name":"t"},"node_modules/evil":{"version":"1.0.0","integrity":"sha512-x"}}}"#,
+        )
+        .unwrap();
+        dir
+    }
+
+    #[test]
+    fn full_scan_ignores_stale_cache_and_delta_uses_it() {
+        let dir = project();
+        let config = crate::config::Config::default();
+        let ctx = ScanContext {
+            root: dir.path(),
+            config: &config,
+        };
+        let first = PatternsCheck.run(&ctx).unwrap().findings.len();
+        assert!(first > 0, "fixture must produce findings");
+        crate::scan_cache::update_cache(dir.path());
+        // Regression: a populated cache used to make the next full scan return 0 findings.
+        assert_eq!(PatternsCheck.run(&ctx).unwrap().findings.len(), first);
+        // Delta mode (depsec protect) may skip unchanged packages.
+        assert!(PatternsCheck.run_delta(&ctx).unwrap().findings.is_empty());
     }
 }

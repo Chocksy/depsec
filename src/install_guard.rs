@@ -392,7 +392,8 @@ fn post_install_scan(
         return vec![];
     }
 
-    let cache = crate::scan_cache::ScanCache::load(root);
+    let config = crate::config::load_config(root);
+    let cache = crate::scan_cache::ScanCache::load_valid(root, &config);
     let to_scan = cache.packages_to_scan(&lock_packages);
     if to_scan.is_empty() {
         // All cached — nothing new installed
@@ -401,14 +402,13 @@ fn post_install_scan(
     }
 
     // Run a quick patterns scan on the delta
-    let config = crate::config::load_config(root);
     let ctx = crate::checks::ScanContext {
         root,
         config: &config,
     };
 
     let check = crate::checks::patterns::PatternsCheck;
-    let result = match crate::checks::Check::run(&check, &ctx) {
+    let result = match check.run_delta(&ctx) {
         Ok(r) => r,
         Err(_) => {
             crate::scan_cache::update_cache(root);
