@@ -215,6 +215,9 @@ enum Commands {
         /// Write per-finding results as JSON to this file
         #[arg(long)]
         out: Option<PathBuf>,
+        /// Ground-truth label for every finding in this corpus: tp (malware) or fp (benign)
+        #[arg(long, value_parser = ["tp", "fp"])]
+        label: String,
     },
 
     /// Manage detection rules
@@ -521,12 +524,22 @@ fn main() -> ExitCode {
             commands::audit_cmd::run(&package, &root, dry_run, color, budget)
         }
 
-        Commands::TriageEval { path, limit, out } => {
+        Commands::TriageEval {
+            path,
+            limit,
+            out,
+            label,
+        } => {
             let root = match canonicalize_or_exit(&path) {
                 Ok(r) => r,
                 Err(e) => return e,
             };
-            commands::triage_eval::run(&root, limit, out.as_deref())
+            let label = if label == "tp" {
+                commands::triage_eval::Label::Tp
+            } else {
+                commands::triage_eval::Label::Fp
+            };
+            commands::triage_eval::run(&root, limit, label, out.as_deref())
         }
 
         Commands::Rules { action } => match action {

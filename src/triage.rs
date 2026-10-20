@@ -6,7 +6,7 @@ use crate::checks::Finding;
 use crate::config::TriageConfig;
 use crate::llm::{ChatMessage, LlmApi, TokenUsage};
 use crate::triage_cache;
-use crate::triage_prefilter::{self, DecisionApi};
+use crate::triage_prefilter::{self, Choice, DecisionApi};
 
 pub const SYSTEM_PROMPT: &str = r#"You are a security analyst triaging static analysis findings from a supply chain security scanner. Your job is to classify each finding as a True Positive (real vulnerability), False Positive (not a real issue), or Needs Investigation (insufficient context to decide).
 
@@ -288,6 +288,7 @@ fn auto_resolve(finding: &Finding) -> TriageResult {
 /// Run the d1 prefilter on one finding. Returns a TriageResult only when d1
 /// is confident enough to clear it as FP; otherwise returns the cost/latency
 /// spent so the caller can fold it into the LLM result.
+#[allow(dead_code)]
 fn run_prefilter(
     prefilter: &dyn DecisionApi,
     finding: &Finding,
@@ -332,6 +333,120 @@ fn run_prefilter(
     }
 }
 
+/// d1-only triage (no expensive LLM tier).
+///
+/// - Deterministic findings are auto-resolved as before.
+/// - Protected rule families (malware, typosquat, advisories, secrets, install
+///   scripts, ...) are never sent to d1 and never suppressed: they are reported
+///   as NEEDS INVESTIGATION for a human.
+/// - Everything else gets one d1 Choice. Only FP at P >= prefilter_fp_threshold
+///   (default 0.95) is marked FALSE POSITIVE. A TP answer is reported as TP;
+///   FP below the bar, UNSURE and API errors are NEEDS INVESTIGATION.
+pub fn triage_findings_d1(
+    findings: &[Finding],
+    root: &Path,
+    d1: &dyn DecisionApi,
+    config: &TriageConfig,
+) -> Vec<(usize, TriageResult, TokenUsage)> {
+    let mut results = Vec::new();
+    let mut considered = 0usize;
+    for (idx, finding) in findings.iter().enumerate() {
+        if is_deterministic_true_positive(finding) {
+            results.push((idx, auto_resolve(finding), TokenUsage::default()));
+            continue;
+        }
+        if considered >= config.max_findings {
+            break;
+        }
+        considered += 1;
+        if triage_prefilter::is_protected(finding, &config.prefilter_always_llm) {
+            results.push((
+                idx,
+                needs_review(
+                    finding,
+                    0.0,
+                    0.0,
+                    0,
+                    "Protected rule family: never auto-triaged, review manually",
+                ),
+                TokenUsage::default(),
+            ));
+            continue;
+        }
+        if let Some(mut cached) = triage_cache::get_cached(finding, root, config.cache_ttl_days) {
+            cached.stage = Stage::Cache;
+            cached.cost_usd = 0.0;
+            cached.latency_ms = 0;
+            results.push((idx, cached, TokenUsage::default()));
+            continue;
+        }
+        let Some(state) =
+            triage_prefilter::build_state(finding, root, config.prefilter_snippet_lines)
+        else {
+            continue;
+        };
+        let start = std::time::Instant::now();
+        let result = match d1.decide(&state) {
+            Ok(d) => {
+                let ms = start.elapsed().as_millis() as u64;
+                let classification = if d.clears(config.prefilter_fp_threshold) {
+                    Classification::FalsePositive
+                } else if d.choice == Choice::TruePositive {
+                    Classification::TruePositive
+                } else {
+                    Classification::NeedsInvestigation
+                };
+                TriageResult {
+                    classification,
+                    confidence: d.confidence,
+                    reasoning: format!(
+                        "{} answered {:?} at {:.1}% (FP bar {:.0}%)",
+                        d1.model(),
+                        d.choice,
+                        d.confidence * 100.0,
+                        config.prefilter_fp_threshold * 100.0
+                    ),
+                    recommendation: match classification {
+                        Classification::FalsePositive => "Likely false positive".into(),
+                        _ => "Review this finding".into(),
+                    },
+                    stage: Stage::Prefilter,
+                    cost_usd: d.cost_usd,
+                    latency_ms: ms,
+                }
+            }
+            Err(e) => {
+                eprintln!("  d1 failed for {}: {e}", finding.rule_id);
+                needs_review(
+                    finding,
+                    0.0,
+                    0.0,
+                    start.elapsed().as_millis() as u64,
+                    "d1 call failed",
+                )
+            }
+        };
+        let _ = triage_cache::set_cached(finding, root, &result);
+        results.push((idx, result, TokenUsage::default()));
+    }
+    results
+}
+
+fn needs_review(_f: &Finding, confidence: f64, cost: f64, ms: u64, why: &str) -> TriageResult {
+    TriageResult {
+        classification: Classification::NeedsInvestigation,
+        confidence,
+        reasoning: why.into(),
+        recommendation: "Review this finding".into(),
+        stage: Stage::Deterministic,
+        cost_usd: cost,
+        latency_ms: ms,
+    }
+}
+
+/// Legacy LLM (Sonnet) cascade. No longer wired into `scan`; kept only for
+/// its tests until removed.
+#[allow(dead_code)]
 pub fn triage_findings(
     findings: &[Finding],
     root: &Path,

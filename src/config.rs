@@ -129,12 +129,44 @@ pub struct TriageConfig {
     pub prefilter_snippet_lines: usize,
     /// Extra rule-ID prefixes that always skip the prefilter (additive to built-ins)
     pub prefilter_always_llm: Vec<String>,
+    /// Allow falling back to the generic OPENROUTER_API_KEY when the
+    /// dedicated key env is unset. Off by default so depsec never silently
+    /// spends another app's key. Also enabled by DEPSEC_ALLOW_SHARED_OPENROUTER_KEY=1.
+    pub allow_shared_key: bool,
+}
+
+/// Default env var for depsec's own OpenRouter key.
+pub const DEPSEC_KEY_ENV: &str = "DEPSEC_OPENROUTER_API_KEY";
+
+/// Resolve the OpenRouter API key for triage. Uses `api_key_env` (default
+/// DEPSEC_OPENROUTER_API_KEY). Falls back to OPENROUTER_API_KEY only with an
+/// explicit opt-in. Returns Err with a human-readable reason otherwise.
+pub fn resolve_api_key(config: &TriageConfig) -> Result<String, String> {
+    if let Ok(k) = std::env::var(&config.api_key_env) {
+        if !k.is_empty() {
+            return Ok(k);
+        }
+    }
+    let opt_in = config.allow_shared_key
+        || std::env::var("DEPSEC_ALLOW_SHARED_OPENROUTER_KEY").as_deref() == Ok("1");
+    if opt_in && config.api_key_env != "OPENROUTER_API_KEY" {
+        if let Ok(k) = std::env::var("OPENROUTER_API_KEY") {
+            if !k.is_empty() {
+                return Ok(k);
+            }
+        }
+    }
+    Err(format!(
+        "{} is not set. depsec does not fall back to OPENROUTER_API_KEY unless you opt in \
+         (triage.allow_shared_key = true or DEPSEC_ALLOW_SHARED_OPENROUTER_KEY=1).",
+        config.api_key_env
+    ))
 }
 
 impl Default for TriageConfig {
     fn default() -> Self {
         Self {
-            api_key_env: "OPENROUTER_API_KEY".into(),
+            api_key_env: DEPSEC_KEY_ENV.into(),
             model: "anthropic/claude-sonnet-4-6".into(),
             max_findings: 50,
             timeout_seconds: 60,
@@ -144,6 +176,7 @@ impl Default for TriageConfig {
             prefilter_fp_threshold: 0.95,
             prefilter_snippet_lines: 3,
             prefilter_always_llm: vec![],
+            allow_shared_key: false,
         }
     }
 }
@@ -414,7 +447,8 @@ skip_dirs = ["custom-cache"]
     #[test]
     fn test_default_triage_config() {
         let config = TriageConfig::default();
-        assert_eq!(config.api_key_env, "OPENROUTER_API_KEY");
+        assert_eq!(config.api_key_env, "DEPSEC_OPENROUTER_API_KEY");
+        assert!(!config.allow_shared_key);
         assert_eq!(config.model, "anthropic/claude-sonnet-4-6");
         assert_eq!(config.max_findings, 50);
         assert_eq!(config.timeout_seconds, 60);

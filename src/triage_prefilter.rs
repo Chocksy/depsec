@@ -162,9 +162,13 @@ pub struct D1Client {
 impl D1Client {
     /// Create from triage config; same API key env as the main LLM client.
     pub fn from_config(config: &TriageConfig) -> Option<Self> {
-        let api_key = std::env::var(&config.api_key_env)
-            .or_else(|_| std::env::var("OPENROUTER_API_KEY"))
-            .ok()?;
+        let api_key = match crate::config::resolve_api_key(config) {
+            Ok(k) => k,
+            Err(msg) => {
+                eprintln!("depsec triage: {msg}");
+                return None;
+            }
+        };
         if api_key.is_empty() {
             return None;
         }
@@ -382,8 +386,20 @@ mod tests {
         std::env::remove_var("DEPSEC_PREFILTER_TEST_KEY");
         let mut cfg = TriageConfig::default();
         cfg.api_key_env = "DEPSEC_PREFILTER_TEST_KEY".into();
-        if std::env::var("OPENROUTER_API_KEY").is_err() {
+        // Never silently falls back to OPENROUTER_API_KEY without opt-in,
+        // even when that variable is set.
+        assert!(!cfg.allow_shared_key);
+        if std::env::var("DEPSEC_ALLOW_SHARED_OPENROUTER_KEY").as_deref() != Ok("1") {
             assert!(D1Client::from_config(&cfg).is_none());
         }
+    }
+
+    #[test]
+    fn from_config_uses_dedicated_key_env() {
+        std::env::set_var("DEPSEC_PREFILTER_TEST_KEY2", "sk-or-test");
+        let mut cfg = TriageConfig::default();
+        cfg.api_key_env = "DEPSEC_PREFILTER_TEST_KEY2".into();
+        assert!(D1Client::from_config(&cfg).is_some());
+        std::env::remove_var("DEPSEC_PREFILTER_TEST_KEY2");
     }
 }

@@ -13,7 +13,14 @@ struct ChatRequest {
     model: String,
     messages: Vec<ChatMessage>,
     temperature: f32,
+    /// Always set: without it OpenRouter reserves the model's full output
+    /// window (65,536 tokens for Sonnet, ~$1) and returns 402 on any key whose
+    /// remaining limit is below that, even for a 200-token triage answer.
+    max_tokens: u32,
 }
+
+/// Triage answers are a small JSON object; 1024 tokens is plenty.
+const DEFAULT_MAX_TOKENS: u32 = 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
@@ -63,6 +70,7 @@ pub struct TokenUsage {
 #[cfg_attr(test, mockall::automock)]
 pub trait LlmApi {
     fn chat(&self, messages: &[ChatMessage]) -> Result<ChatResponse>;
+    #[allow(dead_code)]
     fn model(&self) -> &str;
     fn estimate_cost(&self, input_tokens: u32, output_tokens: u32) -> f64;
 }
@@ -111,9 +119,7 @@ impl LlmClient {
     /// Create client from config, falling back to env
     pub fn from_config(config: &crate::config::TriageConfig) -> Option<Self> {
         // Try config's env var name first, then default OPENROUTER_API_KEY
-        let api_key = std::env::var(&config.api_key_env)
-            .or_else(|_| std::env::var("OPENROUTER_API_KEY"))
-            .ok()?;
+        let api_key = crate::config::resolve_api_key(config).ok()?;
         if api_key.is_empty() {
             return None;
         }
@@ -131,6 +137,7 @@ impl LlmClient {
             model: self.model.clone(),
             messages: messages.to_vec(),
             temperature: 0.1, // Low creativity for classification tasks
+            max_tokens: DEFAULT_MAX_TOKENS,
         };
 
         let response = ureq::post(&format!("{}/chat/completions", self.base_url))
@@ -139,8 +146,20 @@ impl LlmClient {
             .set("HTTP-Referer", "https://github.com/chocksy/depsec")
             .set("X-Title", "depsec")
             .timeout(std::time::Duration::from_secs(self.timeout_secs))
-            .send_json(&request)
-            .context("Failed to send request to OpenRouter")?;
+            .send_json(&request);
+        let response = match response {
+            Ok(r) => r,
+            Err(ureq::Error::Status(code, r)) => {
+                // Surface OpenRouter's error message (never contains the key).
+                let body = r.into_string().unwrap_or_default();
+                let msg = serde_json::from_str::<serde_json::Value>(&body)
+                    .ok()
+                    .and_then(|v| v["error"]["message"].as_str().map(str::to_owned))
+                    .unwrap_or_else(|| body.chars().take(300).collect());
+                anyhow::bail!("OpenRouter returned HTTP {code}: {msg}");
+            }
+            Err(e) => return Err(e).context("Failed to send request to OpenRouter"),
+        };
 
         let raw: ChatResponseRaw = response
             .into_json()
@@ -241,17 +260,29 @@ pub fn print_setup_instructions() {
     eprintln!("Setup:");
     eprintln!("  1. Get an API key at https://openrouter.ai/keys");
     eprintln!("  2. Set the environment variable:");
-    eprintln!("     export OPENROUTER_API_KEY=sk-or-...");
+    eprintln!("     export DEPSEC_OPENROUTER_API_KEY=sk-or-...   (depsec's own key)");
     eprintln!();
     eprintln!("Or configure in depsec.toml:");
     eprintln!("  [triage]");
-    eprintln!("  api_key_env = \"OPENROUTER_API_KEY\"");
+    eprintln!("  api_key_env = \"DEPSEC_OPENROUTER_API_KEY\"");
     eprintln!("  model = \"anthropic/claude-sonnet-4-6\"");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chat_request_caps_max_tokens() {
+        let req = ChatRequest {
+            model: "m".into(),
+            messages: vec![],
+            temperature: 0.1,
+            max_tokens: DEFAULT_MAX_TOKENS,
+        };
+        let v = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["max_tokens"], 1024);
+    }
 
     #[test]
     fn test_extract_json_raw() {
